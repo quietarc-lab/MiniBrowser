@@ -56,5 +56,7 @@ final class CompactPageModeServiceTests: XCTestCase {
         XCTAssertTrue(script.contains("restoreSubmittedDraft"))
         XCTAssertTrue(script.contains("userEditedAfterSubmission"))
         XCTAssertTrue(script.contains("type: \"postCompleted\""))
+        XCTAssertTrue(script.contains("observePostCompletionStatus"))
+        XCTAssertTrue(script.contains("completionDiscoveryObserver.observe(doc.body"))
     }
 }

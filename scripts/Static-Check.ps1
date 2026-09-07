@@ -59,6 +59,7 @@ Assert-NotContains $focusModeFile 'minibrowser-targetpage-submit-status' 'no Min
 Assert-Contains $focusModeFile '#retmestip' 'hidden TargetPage submit status'
 Assert-Contains $focusModeFile 'capturePostState' 'TargetPage draft capture on posting'
 Assert-Contains $focusModeFile 'postCompleted' 'TargetPage post completion handwriting bridge'
+Assert-Contains $focusModeFile 'observePostCompletionStatus' 'TargetPage post completion status observer'
 Assert-Contains $focusModeFile 'initializeCompactPage' 'retryable TargetPage compact-page initialization'
 Assert-Contains $listServiceFile 'bytes=0-32767' 'bounded TargetPage opener request'
 Assert-Contains $listServiceFile 'limit:\s*Int\s*=\s*60' 'sixty-item TargetPage list limit'

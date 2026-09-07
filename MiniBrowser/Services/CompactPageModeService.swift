@@ -438,6 +438,29 @@ enum CompactPageModeService {
       });
       formObserver.observe(form, { childList: true, subtree: true, attributes: true });
 
+      // The site's asynchronous post completion marker is outside the form.
+      // Watch only that marker so the existing completion bridge can reopen a
+      // canvas after a successful post without changing the posting flow.
+      function observePostCompletionStatus() {
+        const status = doc.getElementById("retmestip");
+        if (!status || status.dataset.minibrowserCompletionObserver === "true") return;
+        status.dataset.minibrowserCompletionObserver = "true";
+        const completionObserver = new MutationObserver(() => notifyPostCompletion());
+        completionObserver.observe(status, {
+          childList: true,
+          subtree: true,
+          characterData: true
+        });
+      }
+
+      observePostCompletionStatus();
+      const completionDiscoveryObserver = new MutationObserver(() => {
+        observePostCompletionStatus();
+      });
+      if (doc.body) {
+        completionDiscoveryObserver.observe(doc.body, { childList: true, subtree: true });
+      }
+
       function previousModeHeader(element) {
         let candidate = element.previousElementSibling;
         while (candidate) {
