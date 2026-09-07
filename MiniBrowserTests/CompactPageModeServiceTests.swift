@@ -58,8 +58,5 @@ final class CompactPageModeServiceTests: XCTestCase {
         XCTAssertTrue(script.contains("type: \"postCompleted\""))
         XCTAssertTrue(script.contains("postCompletionObserver.observe(doc.body"))
         XCTAssertTrue(script.contains("characterData: true"))
-        XCTAssertTrue(script.contains("minibrowser-targetpage-post-status"))
-        XCTAssertTrue(script.contains("送信中…"))
-        XCTAssertTrue(script.contains("投稿完了"))
     }
 }

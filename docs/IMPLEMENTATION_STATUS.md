@@ -72,5 +72,3 @@ The follow-up form-stability batch removes the app-owned form-position control a
 Device testing identified that the target page updates its asynchronous completion node outside the reply form. The completion observer now watches the document body rather than only the form, so the existing in-memory canvas bridge receives the successful-post notification on same-thread replies. Windows static checks and injected-JavaScript syntax checks passed; device confirmation is pending.
 
 Handwriting canvas use is now also retained in process memory independently of image selection. After a user opens the existing handwriting field, target-page thread changes reopen that field for the remainder of the app session; this state is neither logged nor persisted.
-
-The compact form now mirrors the target page's send-progress and completion state in a fixed overlay beside the action row. It does not participate in flex layout, so it cannot move the reply or draft buttons; the target page's original inline status remains hidden.
