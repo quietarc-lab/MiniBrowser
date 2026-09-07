@@ -80,21 +80,43 @@ enum CanvasImageSessionService {
     static let openExistingCanvasScript = #"""
     (() => {
       "use strict";
-      if (document.querySelector("canvas#oejs")) return;
+
+      const isVisible = element => {
+        if (!(element instanceof Element)) return false;
+        const style = window.getComputedStyle(element);
+        return style.display !== "none" &&
+          style.visibility !== "hidden" &&
+          element.getClientRects().length > 0;
+      };
+
+      const canvasHost = document.getElementById("oe3");
+      const canvas = document.querySelector("canvas#oejs");
+      if (canvas && isVisible(canvasHost || canvas)) return;
+
       let clicked = false;
       let attempts = 0;
       const openExistingField = () => {
-        if (document.querySelector("canvas#oejs")) return;
+        const currentCanvas = document.querySelector("canvas#oejs");
+        const currentHost = document.getElementById("oe3");
+        if (currentCanvas && isVisible(currentHost || currentCanvas)) return;
         attempts += 1;
         if (!clicked) {
-          const trigger = Array.from(document.querySelectorAll("a, button, input[type='button'], input[type='submit']"))
-            .find(element => /手書きjs/.test(String(element.value || element.textContent || "").replace(/\s+/g, "")));
+          const trigger = Array.from(document.querySelectorAll(
+            "#oebtnj, [onclick*='ChangeDraw'], a, button, input[type='button'], input[type='submit']"
+          )).find(element => {
+            if (!isVisible(element)) return false;
+            const text = String(element.value || element.textContent || "").replace(/\s+/g, "");
+            const onclick = String(element.getAttribute("onclick") || "");
+            return element.id === "oebtnj" ||
+              /ChangeDraw\s*\(\s*['\"]j['\"]\s*\)/i.test(onclick) ||
+              /手書きjs/.test(text);
+          });
           if (trigger instanceof HTMLElement) {
             clicked = true;
             trigger.click();
           }
         }
-        if (attempts < 15 && !document.querySelector("canvas#oejs")) {
+        if (attempts < 50) {
           setTimeout(openExistingField, 120);
         }
       };

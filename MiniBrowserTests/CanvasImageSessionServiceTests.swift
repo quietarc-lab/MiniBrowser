@@ -31,9 +31,9 @@ final class CanvasImageSessionServiceTests: XCTestCase {
         XCTAssertTrue(restoration.contains("canvas#oejs"))
         XCTAssertTrue(CanvasImageSessionService.openExistingCanvasScript.contains("手書きjs"))
         XCTAssertTrue(CanvasImageSessionService.openExistingCanvasScript.contains("trigger.click()"))
-        XCTAssertTrue(CanvasImageSessionService.openExistingCanvasScript.contains(
-            "if (document.querySelector(\"canvas#oejs\")) return;"
-        ))
+        XCTAssertTrue(CanvasImageSessionService.openExistingCanvasScript.contains("#oebtnj"))
+        XCTAssertTrue(CanvasImageSessionService.openExistingCanvasScript.contains("getComputedStyle"))
+        XCTAssertTrue(CanvasImageSessionService.openExistingCanvasScript.contains("attempts < 50"))
     }
 
     func testStoreRejectsUnsupportedAndCreatesNoCrossLaunchState() {
