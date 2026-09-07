@@ -53,7 +53,6 @@ struct BrowserWebView: UIViewRepresentable {
         private var timeoutTimer: Timer?
         private weak var attachedWebView: WKWebView?
         private let handwritingImageStore = TargetPageHandwritingImageStore()
-        private var handwritingCanvasWasOpen = false
 
         init(model: BrowserViewModel) {
             self.model = model
@@ -85,18 +84,16 @@ struct BrowserWebView: UIViewRepresentable {
                 _ = handwritingImageStore.replace(withDataURL: dataURL)
 
             case "pageReady":
-                guard handwritingCanvasWasOpen || handwritingImageStore.hasImage else { return }
+                guard handwritingImageStore.hasImage else { return }
                 attachedWebView?.evaluateJavaScript(CanvasImageSessionService.openExistingCanvasScript)
 
             case "canvasReady":
-                handwritingCanvasWasOpen = true
                 guard let script = handwritingImageStore.restorationScript() else { return }
                 attachedWebView?.evaluateJavaScript(script)
 
             case "postCompleted":
                 let canvasWasOpen = body["canvasWasOpen"] as? Bool ?? false
-                handwritingCanvasWasOpen = handwritingCanvasWasOpen || canvasWasOpen
-                guard handwritingCanvasWasOpen || handwritingImageStore.hasImage else { return }
+                guard canvasWasOpen || handwritingImageStore.hasImage else { return }
                 attachedWebView?.evaluateJavaScript(CanvasImageSessionService.openExistingCanvasScript)
 
             default:

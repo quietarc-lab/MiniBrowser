@@ -81,7 +81,6 @@ Assert-Contains $handwritingServiceFile 'canvas#oejs' 'existing handwriting canv
 Assert-Contains $handwritingServiceFile 'pageReady' 'TargetPage handwriting page-ready signal'
 Assert-Contains $handwritingServiceFile 'openExistingCanvasScript' 'existing handwriting control opener'
 Assert-Contains $webViewFile 'case "postCompleted"' 'TargetPage post-completion handwriting receiver'
-Assert-Contains $webViewFile 'handwritingCanvasWasOpen' 'in-memory handwriting canvas state'
 Assert-Contains $handwritingServiceFile 'context\.fillRect\(x, y, 1, 1\)' 'single-pixel handwriting image variation'
 Assert-Contains $handwritingServiceFile 'maximumImageDataByteCount = 3_000_000' 'bounded in-memory handwriting image size'
 Assert-Contains $projectFile 'ASSETCATALOG_COMPILER_APPICON_NAME:\s*AppIcon' 'AppIcon asset compiler setting'
