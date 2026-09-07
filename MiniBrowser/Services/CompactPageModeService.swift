@@ -364,9 +364,9 @@ enum CompactPageModeService {
       }
 
       function notifyPostCompletion() {
-        if (postCompletionReported) return true;
+        if (postCompletionReported) return;
         const status = doc.getElementById("retmestip");
-        if (!status || String(status.textContent || "").trim() !== "完了") return false;
+        if (!status || String(status.textContent || "").trim() !== "完了") return;
         postCompletionReported = true;
         const handler = window.webkit && window.webkit.messageHandlers &&
           window.webkit.messageHandlers.miniBrowserHandwriting;
@@ -376,7 +376,6 @@ enum CompactPageModeService {
             canvasWasOpen: canvasWasOpenAtSubmission
           });
         }
-        return true;
       }
 
       function capturePostState() {
@@ -438,16 +437,6 @@ enum CompactPageModeService {
         notifyPostCompletion();
       });
       formObserver.observe(form, { childList: true, subtree: true, attributes: true });
-
-      // The target page creates #retmestip beside the submit button, outside
-      // the form. Observe the document so its later "完了" update reliably
-      // restores the canvas after the asynchronous post finishes.
-      const postCompletionObserver = new MutationObserver(() => {
-        if (notifyPostCompletion()) {
-          postCompletionObserver.disconnect();
-        }
-      });
-      postCompletionObserver.observe(doc.body, { childList: true, subtree: true, characterData: true });
 
       function previousModeHeader(element) {
         let candidate = element.previousElementSibling;
