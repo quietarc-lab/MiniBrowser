@@ -451,6 +451,10 @@ enum CompactPageModeService {
           subtree: true,
           characterData: true
         });
+        // The site can create and populate #retmestip in the same task. In
+        // that case the observer sees only the already-final "完了" value,
+        // so check the current value immediately after attaching it.
+        notifyPostCompletion();
       }
 
       observePostCompletionStatus();
