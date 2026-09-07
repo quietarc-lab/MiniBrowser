@@ -57,6 +57,7 @@ Assert-NotContains $focusModeFile 'minibrowser-targetpage-form-placement' 'no Mi
 Assert-NotContains $focusModeFile 'latestOwnResponse\.table\.after\(form\)' 'no bottom placement after own response'
 Assert-NotContains $focusModeFile 'minibrowser-targetpage-submit-status' 'no MiniBrowser submit status slot'
 Assert-Contains $focusModeFile '#retmestip' 'hidden TargetPage submit status'
+Assert-Contains $focusModeFile 'minibrowser-targetpage-post-status' 'fixed TargetPage post status overlay'
 Assert-Contains $focusModeFile 'capturePostState' 'TargetPage draft capture on posting'
 Assert-Contains $focusModeFile 'postCompleted' 'TargetPage post completion handwriting bridge'
 Assert-Contains $focusModeFile 'postCompletionObserver\.observe\(doc\.body' 'document-level post completion observer'

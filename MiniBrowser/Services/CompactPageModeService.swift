@@ -145,6 +145,7 @@ enum CompactPageModeService {
             display: flex !important;
             justify-content: flex-end !important;
             align-items: center !important;
+            position: relative !important;
             gap: 6px !important;
             width: 100% !important;
             margin: -3px 0 2px !important;
@@ -156,6 +157,19 @@ enum CompactPageModeService {
             min-width: 68px !important;
             min-height: 26px !important;
             box-sizing: border-box !important;
+          }
+          #minibrowser-targetpage-post-status {
+            position: absolute !important;
+            right: 148px !important;
+            top: 50% !important;
+            transform: translateY(-50%) !important;
+            min-width: 5.5em !important;
+            color: #555 !important;
+            font-size: 12px !important;
+            line-height: 1 !important;
+            text-align: right !important;
+            white-space: nowrap !important;
+            pointer-events: none !important;
           }
           #minibrowser-targetpage-draft-toggle {
             padding: 2px 6px !important;
@@ -317,6 +331,16 @@ enum CompactPageModeService {
         actions.appendChild(draftToggle);
       }
 
+      let postStatus = doc.getElementById("minibrowser-targetpage-post-status");
+      if (!postStatus && actions) {
+        postStatus = doc.createElement("span");
+        postStatus.id = "minibrowser-targetpage-post-status";
+        postStatus.setAttribute("aria-live", "polite");
+        postStatus.setAttribute("aria-atomic", "true");
+        postStatus.hidden = true;
+        actions.appendChild(postStatus);
+      }
+
       try { localStorage.removeItem("MiniBrowser.TargetPageFormPlacement"); } catch (_) {}
 
       function updateDraftToggle() {
@@ -347,6 +371,34 @@ enum CompactPageModeService {
       let userEditedAfterSubmission = false;
       let canvasWasOpenAtSubmission = false;
       let postCompletionReported = false;
+      let postStatusTimer = null;
+
+      function setPostStatus(message, hideAfterMilliseconds = 0) {
+        if (!postStatus) return;
+        if (postStatusTimer !== null) {
+          clearTimeout(postStatusTimer);
+          postStatusTimer = null;
+        }
+        postStatus.textContent = message || "";
+        postStatus.hidden = !message;
+        if (message && hideAfterMilliseconds > 0) {
+          postStatusTimer = setTimeout(() => {
+            postStatus.textContent = "";
+            postStatus.hidden = true;
+            postStatusTimer = null;
+          }, hideAfterMilliseconds);
+        }
+      }
+
+      function syncPostStatus() {
+        const status = doc.getElementById("retmestip");
+        const sourceText = String(status && status.textContent || "").trim();
+        if (sourceText === "…") {
+          setPostStatus("送信中…");
+        } else if (sourceText === "完了") {
+          setPostStatus("投稿完了", 2000);
+        }
+      }
 
       function restoreSubmittedDraft() {
         if (!draftEnabled || !textarea || submittedDraft === null ||
@@ -385,6 +437,7 @@ enum CompactPageModeService {
         userEditedAfterSubmission = false;
         canvasWasOpenAtSubmission = Boolean(doc.querySelector("canvas#oejs"));
         postCompletionReported = false;
+        setPostStatus("送信中…");
         if (draftEnabled) {
           saveDraft();
           scheduleSubmittedDraftRestore();
@@ -441,11 +494,10 @@ enum CompactPageModeService {
 
       // The target page creates #retmestip beside the submit button, outside
       // the form. Observe the document so its later "完了" update reliably
-      // restores the canvas after the asynchronous post finishes.
+      // restores the canvas after every asynchronous post finishes.
       const postCompletionObserver = new MutationObserver(() => {
-        if (notifyPostCompletion()) {
-          postCompletionObserver.disconnect();
-        }
+        syncPostStatus();
+        notifyPostCompletion();
       });
       postCompletionObserver.observe(doc.body, { childList: true, subtree: true, characterData: true });
 
