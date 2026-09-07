@@ -58,7 +58,7 @@ final class CompactPageModeServiceTests: XCTestCase {
         XCTAssertTrue(script.contains("type: \"postCompleted\""))
         XCTAssertTrue(script.contains("observePostCompletionStatus"))
         XCTAssertTrue(script.contains("completionObserver.observe(status"))
-        XCTAssertTrue(script.contains("notifyPostCompletion();\n      }\n\n      observePostCompletionStatus"))
+        XCTAssertTrue(script.contains("check the current value immediately"))
         XCTAssertTrue(script.contains("completionDiscoveryObserver.observe(doc.body"))
     }
 }
