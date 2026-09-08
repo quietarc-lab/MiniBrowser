@@ -156,6 +156,18 @@ struct BrowserWebView: UIViewRepresentable {
                                          hasComment: hasComment,
                                          canSubmit: canSubmit)
 
+            case "submitReadiness":
+                guard let pageToken,
+                      let ready = body["ready"] as? Bool,
+                      let reason = body["reason"] as? String else {
+                    model.recordAutomaticBridgeIgnored(type: type,
+                                                        reason: "INVALID_PAYLOAD")
+                    return
+                }
+                model.handleSubmitReadiness(pageToken: pageToken,
+                                            ready: ready,
+                                            reason: reason)
+
             case "postCompleted":
                 model.handlePostCompleted(pageToken: pageToken)
                 let canvasWasOpen = body["canvasWasOpen"] as? Bool ?? false

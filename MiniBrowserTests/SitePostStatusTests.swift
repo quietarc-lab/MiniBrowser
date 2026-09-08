@@ -20,12 +20,22 @@ final class SitePostStatusTests: XCTestCase {
                        "IP変更後に最終送信")
         XCTAssertEqual(AutomaticPostStatus.switchingAfterAccessRestriction.rawValue,
                        "アクセス規制 → 次のUAへ")
+        XCTAssertEqual(AutomaticPostStatus.reconnectingAfterContinuousLimit.rawValue,
+                       "連続制限 → AP再接続中")
+        XCTAssertEqual(AutomaticPostStatus.finalSendAfterContinuousLimit.rawValue,
+                       "AP後に最終送信")
+        XCTAssertEqual(AutomaticPostStatus.acceptedPendingVerification.rawValue,
+                       "受付済み・反映確認中")
         XCTAssertEqual(AutomaticPostStatus.completed.rawValue, "完了")
+        XCTAssertEqual(AutomaticPostStatus.completedUnconfirmed.rawValue,
+                       "完了（反映未確認）")
         XCTAssertEqual(AutomaticPostStatus.stopped.rawValue, "自動投稿停止")
         XCTAssertTrue(AutomaticPostStatus.completed.isFinal)
+        XCTAssertTrue(AutomaticPostStatus.completedUnconfirmed.isFinal)
         XCTAssertTrue(AutomaticPostStatus.stopped.isFinal)
         XCTAssertFalse(AutomaticPostStatus.sending.isFinal)
         XCTAssertFalse(AutomaticPostStatus.switchingAfterAccessRestriction.isFinal)
+        XCTAssertFalse(AutomaticPostStatus.acceptedPendingVerification.isFinal)
     }
 
     func testOverlayDimensionsStayFixed() {

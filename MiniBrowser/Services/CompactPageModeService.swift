@@ -854,6 +854,69 @@ enum CompactPageModeService {
     })();
     """#
 
+    static let submitReadinessScript = #"""
+    (() => {
+      "use strict";
+      const isTargetPage = location.hostname === "img.2chan.net" &&
+        /^\/[^/]+\/res\/\d+\.htm$/.test(location.pathname);
+      const pageToken = typeof window.__miniBrowserPageToken === "string" ?
+        window.__miniBrowserPageToken : "";
+      const handler = window.webkit && window.webkit.messageHandlers &&
+        window.webkit.messageHandlers.miniBrowserHandwriting;
+      const send = payload => {
+        if (!handler || !pageToken) return;
+        handler.postMessage(Object.assign({ pageToken }, payload));
+      };
+      if (!isTargetPage) {
+        send({ type: "submitReadiness", ready: false,
+               reason: "OUTSIDE_TARGET_PAGE" });
+        return false;
+      }
+      if (!pageToken) return false;
+      if (document.readyState !== "complete") {
+        send({ type: "submitReadiness", ready: false,
+               reason: "DOCUMENT_LOADING" });
+        return false;
+      }
+      const form = Array.from(document.forms).find(candidate =>
+        candidate.querySelector('textarea[name="com"]')
+      );
+      if (!form || !form.isConnected) {
+        send({ type: "submitReadiness", ready: false,
+               reason: "FORM_MISSING" });
+        return false;
+      }
+      const textarea = form.querySelector('textarea[name="com"]');
+      if (!textarea || !textarea.isConnected) {
+        send({ type: "submitReadiness", ready: false,
+               reason: "COMMENT_FIELD_MISSING" });
+        return false;
+      }
+      const submitButton = Array.from(form.querySelectorAll(
+        'input[type="submit"], button[type="submit"]'
+      )).find(button => /返信|送信/.test(button.value || button.textContent || ""));
+      if (!(submitButton instanceof HTMLElement) || !submitButton.isConnected) {
+        send({ type: "submitReadiness", ready: false,
+               reason: "SUBMIT_BUTTON_MISSING" });
+        return false;
+      }
+      if (submitButton.disabled || submitButton.getAttribute("aria-disabled") === "true") {
+        send({ type: "submitReadiness", ready: false,
+               reason: "SUBMIT_BUTTON_DISABLED" });
+        return false;
+      }
+      const status = document.getElementById("retmestip");
+      const statusText = status ? String(status.textContent || "").trim() : "";
+      if (statusText === "…") {
+        send({ type: "submitReadiness", ready: false,
+               reason: "POST_IN_FLIGHT" });
+        return false;
+      }
+      send({ type: "submitReadiness", ready: true, reason: "READY" });
+      return true;
+    })();
+    """#
+
     static let autoSubmitScript = #"""
     (() => {
       "use strict";

@@ -26,11 +26,12 @@ struct SitePostStatusView: View {
     private var backgroundColor: Color {
         if let automaticStatus {
             switch automaticStatus {
-            case .completed: return .green
+            case .completed, .completedUnconfirmed: return .green
             case .stopped: return .red
             case .preparingUA, .checkingCookie, .sending, .cookieRetry,
                  .reconnectingAfterIPLimit, .finalSendAfterIPChange,
-                 .switchingAfterAccessRestriction:
+                 .switchingAfterAccessRestriction, .reconnectingAfterContinuousLimit,
+                 .finalSendAfterContinuousLimit, .acceptedPendingVerification:
                 return .blue
             }
         }

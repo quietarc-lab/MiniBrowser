@@ -94,4 +94,19 @@ final class CompactPageModeServiceTests: XCTestCase {
         XCTAssertFalse(submitScript.contains("form.submit"))
         XCTAssertFalse(submitScript.contains("itgkfile"))
     }
+
+    func testSubmitReadinessScriptReportsStablePageConditions() {
+        let script = CompactPageModeService.submitReadinessScript
+        XCTAssertTrue(script.contains("type: \"submitReadiness\""))
+        XCTAssertTrue(script.contains("document.readyState"))
+        XCTAssertTrue(script.contains("form.isConnected"))
+        XCTAssertTrue(script.contains("submitButton.isConnected"))
+        XCTAssertTrue(script.contains("submitButton.disabled"))
+        XCTAssertTrue(script.contains("aria-disabled"))
+        XCTAssertTrue(script.contains("retmestip"))
+        XCTAssertTrue(script.contains("POST_IN_FLIGHT"))
+        XCTAssertTrue(script.contains("reason: \"READY\""))
+        XCTAssertTrue(script.contains("__miniBrowserPageToken"))
+        XCTAssertFalse(script.contains("form.submit"))
+    }
 }

@@ -42,8 +42,12 @@ final class BrowserViewModel: ObservableObject {
     private var pendingUAChangeGeneration: UInt64?
     private var automaticReloadGeneration: UInt64?
     private var automaticPostPreparationTimer: Task<Void, Never>?
+    private var automaticSubmitReadinessTask: Task<Void, Never>?
     private var automaticPostStatusTask: Task<Void, Never>?
     private var latestCompactReady: (pageToken: String, hasComment: Bool, canSubmit: Bool)?
+    private var automaticSubmitReadinessStableSince: Date?
+    private var automaticSubmitReadinessDeadline: Date?
+    private var automaticSubmitReadinessLastReason: String?
     private var handwritingImageAvailable = false
     private var automaticCookieRelatedCount: Int?
     private var automaticCookieCountDelta: Int?
@@ -79,6 +83,7 @@ final class BrowserViewModel: ObservableObject {
         case manual
         case identityRefresh(generationID: UInt64)
         case automaticIPRetry(generationID: UInt64)
+        case automaticContinuousRetry(generationID: UInt64)
     }
 
     private struct PendingAP {
@@ -312,6 +317,11 @@ final class BrowserViewModel: ObservableObject {
         isIdentityRefreshInProgress = true
 
         automaticPostPreparationTimer?.cancel()
+        automaticSubmitReadinessTask?.cancel()
+        automaticSubmitReadinessTask = nil
+        automaticSubmitReadinessStableSince = nil
+        automaticSubmitReadinessDeadline = nil
+        automaticSubmitReadinessLastReason = nil
         automaticPostStatusTask?.cancel()
         latestCompactReady = nil
         automaticCookieRelatedCount = nil
@@ -498,6 +508,56 @@ final class BrowserViewModel: ObservableObject {
         handleAutomaticPostEffect(effect, generationID: generationID)
     }
 
+    func handleSubmitReadiness(pageToken: String,
+                               ready: Bool,
+                               reason: String) {
+        guard automaticPostMachine.isActive,
+              let generationID = automaticPostMachine.generationID,
+              case let .waitingForSubmitReadiness(_, attempt, _) = automaticPostMachine.state else {
+            return
+        }
+        guard automaticPostMachine.pageToken == pageToken else {
+            recordAutomaticBridgeIgnored(type: "submitReadiness",
+                                          reason: "STALE_OR_MISMATCH")
+            return
+        }
+
+        let safeReason = Self.safeSubmitReadinessReason(reason)
+        if safeReason != automaticSubmitReadinessLastReason {
+            automaticSubmitReadinessLastReason = safeReason
+            appendAutomaticEvent(
+                generationID: generationID,
+                phase: "READINESS",
+                event: ready ? "READY_SIGNAL" : "WAITING",
+                result: ready ? "READY" : "NOT_READY",
+                fields: [
+                    ("ATTEMPT", String(attempt)),
+                    ("REASON", safeReason),
+                    ("PAGE_TOKEN_STATE", "MATCH")
+                ]
+            )
+        }
+
+        let now = Date()
+        if ready {
+            if automaticSubmitReadinessStableSince == nil {
+                automaticSubmitReadinessStableSince = now
+            }
+        } else {
+            automaticSubmitReadinessStableSince = nil
+        }
+        let stableMilliseconds = automaticSubmitReadinessStableSince.map {
+            max(0, Int((now.timeIntervalSince($0) * 1_000).rounded()))
+        } ?? 0
+        let effect = automaticPostMachine.handle(.submitReadinessObserved(
+            generationID: generationID,
+            pageToken: pageToken,
+            ready: ready,
+            stableForMilliseconds: stableMilliseconds
+        ))
+        handleAutomaticPostEffect(effect, generationID: generationID)
+    }
+
     func handleHandwritingReady(pageToken: String, ready: Bool) {
         guard automaticPostMachine.isActive,
               let generationID = automaticPostMachine.generationID else { return }
@@ -613,8 +673,9 @@ final class BrowserViewModel: ObservableObject {
         case .succeeded:
             canAcceptVisibleResponse = automaticPostAccepted &&
                 automaticPostVerificationTask != nil
-        case .idle, .preparing, .waitingToSubmit, .waitingForCookieRetry,
-             .waitingForIPRetry, .waitingForContinuousRetry, .stopped:
+        case .idle, .preparing, .waitingForSubmitReadiness, .waitingToSubmit,
+             .waitingForCookieRetry, .waitingForIPRetry, .waitingForContinuousRetry,
+             .waitingForContinuousAPRetry, .stopped:
             canAcceptVisibleResponse = false
         }
         guard canAcceptVisibleResponse,
@@ -645,6 +706,11 @@ final class BrowserViewModel: ObservableObject {
                 ("FINAL_RESULT", "ACCEPTED_VISIBLE")
             ]
         )
+        if automaticPostAccepted,
+           case .succeeded = automaticPostMachine.state {
+            setAutomaticPostStatus(.completed, generationID: generationID)
+            finishAutomaticPost(generationID: generationID, result: "SUCCEEDED")
+        }
     }
 
     func handleOwnPostObservation(pageToken: String?,
@@ -865,15 +931,17 @@ final class BrowserViewModel: ObservableObject {
                       automaticPostMachine.generationID == generationID else {
                     return .autoDismiss
                 }
-                setAutomaticPostStatus(.sending, generationID: generationID)
-                Task { @MainActor [weak self] in
-                    await Task.yield()
-                    guard let self,
-                          self.automaticPostMachine.generationID == generationID else { return }
-                    let effect = self.automaticPostMachine.handle(
-                        .continuousAlertDismissed(generationID: generationID)
-                    )
-                    self.handleAutomaticPostEffect(effect, generationID: generationID)
+                if case .waitingForContinuousRetry = automaticPostMachine.state {
+                    setAutomaticPostStatus(.sending, generationID: generationID)
+                    Task { @MainActor [weak self] in
+                        await Task.yield()
+                        guard let self,
+                              self.automaticPostMachine.generationID == generationID else { return }
+                        let effect = self.automaticPostMachine.handle(
+                            .continuousAlertDismissed(generationID: generationID)
+                        )
+                        self.handleAutomaticPostEffect(effect, generationID: generationID)
+                    }
                 }
             case .accessRestricted:
                 // The state machine has already invalidated the current
@@ -1262,6 +1330,9 @@ final class BrowserViewModel: ObservableObject {
         case let .automaticIPRetry(generationID):
             automaticGenerationID = generationID
             apPurpose = "AUTOMATIC_IP_RETRY"
+        case let .automaticContinuousRetry(generationID):
+            automaticGenerationID = generationID
+            apPurpose = "AUTOMATIC_CONTINUOUS_RETRY"
         }
         var apFields = [
             ("IP_BEFORE", before ?? "UNAVAILABLE"),
@@ -1303,7 +1374,17 @@ final class BrowserViewModel: ObservableObject {
                 .ipReconnectCompleted(generationID: generationID, success: true)
             )
             handleAutomaticPostEffect(effect, generationID: generationID)
-            scheduleIPRetrySubmit(generationID: generationID)
+        case let .automaticContinuousRetry(generationID):
+            guard automaticPostMachine.generationID == generationID else { break }
+            automaticAPResult = after == nil ? "FAILED" : "RECONNECTED"
+            guard after != nil else {
+                stopAutomaticPost(.communicationFailure, generationID: generationID)
+                return
+            }
+            let effect = automaticPostMachine.handle(
+                .continuousAPReconnectCompleted(generationID: generationID, success: true)
+            )
+            handleAutomaticPostEffect(effect, generationID: generationID)
         case .manual:
             break
         }
@@ -1339,6 +1420,9 @@ final class BrowserViewModel: ObservableObject {
         case let .automaticIPRetry(generationID):
             automaticGenerationID = generationID
             apPurpose = "AUTOMATIC_IP_RETRY"
+        case let .automaticContinuousRetry(generationID):
+            automaticGenerationID = generationID
+            apPurpose = "AUTOMATIC_CONTINUOUS_RETRY"
         }
         var apFields = [
             ("IP_BEFORE", before ?? "UNAVAILABLE"),
@@ -1370,14 +1454,24 @@ final class BrowserViewModel: ObservableObject {
             if automaticPostMachine.generationID == generationID {
                 automaticAPResult = "FAILED"
             }
+        case let .automaticContinuousRetry(generationID):
+            if automaticPostMachine.generationID == generationID {
+                automaticAPResult = "FAILED"
+            }
         }
         if reloadAfterCompletion {
             failPendingCookieRefresh(result: "AP_\(status)")
         }
         if case let .identityRefresh(generationID) = purpose {
             stopAutomaticPost(.preparationFailed, generationID: generationID)
-        } else if case let .automaticIPRetry(generationID) = purpose {
-            stopAutomaticPost(.communicationFailure, generationID: generationID)
+        } else {
+            switch purpose {
+            case let .automaticIPRetry(generationID),
+                 let .automaticContinuousRetry(generationID):
+                stopAutomaticPost(.communicationFailure, generationID: generationID)
+            case .manual, .identityRefresh:
+                break
+            }
         }
     }
 
@@ -1387,20 +1481,26 @@ final class BrowserViewModel: ObservableObject {
         switch effect {
         case .none:
             break
-        case .scheduleInitialSubmit:
-            appendAutomaticEvent(
-                generationID: generationID,
-                phase: "PREPARATION",
-                event: "PREPARATION_READY",
-                result: "READY",
-                fields: [
-                    ("AP_RESULT", automaticAPResult),
-                    ("COOKIE_RELATED_COUNT", automaticCookieRelatedCount.map { String($0) } ?? "UNAVAILABLE"),
-                    ("COOKIE_COUNT_DELTA", automaticCookieCountDelta.map { String($0) } ?? "UNAVAILABLE")
-                ]
-            )
+        case let .startSubmitReadiness(attempt, reason):
+            if reason == .initial {
+                appendAutomaticEvent(
+                    generationID: generationID,
+                    phase: "PREPARATION",
+                    event: "PREPARATION_READY",
+                    result: "READY",
+                    fields: [
+                        ("AP_RESULT", automaticAPResult),
+                        ("COOKIE_RELATED_COUNT", automaticCookieRelatedCount.map { String($0) } ?? "UNAVAILABLE"),
+                        ("COOKIE_COUNT_DELTA", automaticCookieCountDelta.map { String($0) } ?? "UNAVAILABLE")
+                    ]
+                )
+            }
             setAutomaticPostStatus(.checkingCookie, generationID: generationID)
-            scheduleInitialSubmit(generationID: generationID)
+            startAutomaticSubmitReadiness(generationID: generationID,
+                                          attempt: attempt,
+                                          reason: reason)
+        case .scheduleSubmitDelay:
+            scheduleSubmitDelay(generationID: generationID)
         case let .submit(attempt):
             submitAutomatically(attempt: attempt, generationID: generationID)
         case .startIPReconnect:
@@ -1416,6 +1516,20 @@ final class BrowserViewModel: ObservableObject {
                 reloadAfterCompletion: false,
                 purpose: .automaticIPRetry(generationID: generationID)
             )
+        case .startContinuousAPReconnect:
+            appendAutomaticEvent(
+                generationID: generationID,
+                phase: "AP",
+                event: "CONTINUOUS_RETRY_RECONNECT_REQUESTED",
+                result: "STARTED",
+                fields: [("AP_PURPOSE", "AUTOMATIC_CONTINUOUS_RETRY")]
+            )
+            setAutomaticPostStatus(.reconnectingAfterContinuousLimit,
+                                   generationID: generationID)
+            startCellularReconnect(
+                reloadAfterCompletion: false,
+                purpose: .automaticContinuousRetry(generationID: generationID)
+            )
         case .startNextAutomaticFlow:
             appendAutomaticEvent(
                 generationID: generationID,
@@ -1427,8 +1541,17 @@ final class BrowserViewModel: ObservableObject {
                                    generationID: generationID)
             startNextAutomaticFlow(previousGenerationID: generationID)
         case .succeeded:
-            setAutomaticPostStatus(.completed, generationID: generationID)
-            finishAutomaticPost(generationID: generationID, result: "SUCCEEDED")
+            clearAutomaticPostDraft()
+            if automaticPostAccepted && !automaticOwnResponseConfirmed {
+                setAutomaticPostStatus(.acceptedPendingVerification,
+                                       generationID: generationID)
+                if automaticPostVerificationTask == nil {
+                    scheduleAutomaticPostVerificationTimeout(generationID: generationID)
+                }
+            } else {
+                setAutomaticPostStatus(.completed, generationID: generationID)
+                finishAutomaticPost(generationID: generationID, result: "SUCCEEDED")
+            }
         case let .stopped(reason):
             setAutomaticPostStatus(.stopped, generationID: generationID)
             automaticPostVerificationTask?.cancel()
@@ -1438,30 +1561,161 @@ final class BrowserViewModel: ObservableObject {
         }
     }
 
-    private func scheduleInitialSubmit(generationID: UInt64) {
-        automaticPostPreparationTimer?.cancel()
-        automaticPostPreparationTimer = Task { @MainActor [weak self] in
-            try? await Task.sleep(nanoseconds: 2_000_000_000)
+    private func startAutomaticSubmitReadiness(generationID: UInt64,
+                                               attempt: Int,
+                                               reason: AutomaticPostReadinessReason) {
+        guard automaticPostMachine.generationID == generationID,
+              case .waitingForSubmitReadiness = automaticPostMachine.state,
+              automaticPostMachine.currentAttempt == attempt else {
+            return
+        }
+        automaticSubmitReadinessTask?.cancel()
+        automaticSubmitReadinessStableSince = nil
+        automaticSubmitReadinessLastReason = nil
+        appendAutomaticEvent(
+            generationID: generationID,
+            phase: "READINESS",
+            event: "READINESS_STARTED",
+            result: "STARTED",
+            fields: [
+                ("ATTEMPT", String(attempt)),
+                ("REASON", reason.rawValue)
+            ]
+        )
+
+        let cooldown: UInt64 = reason == .continuousAPRetry ?
+            3_000_000_000 : 0
+        automaticSubmitReadinessDeadline = Date().addingTimeInterval(
+            10 + Double(cooldown) / 1_000_000_000
+        )
+        automaticSubmitReadinessTask = Task { @MainActor [weak self] in
+            if cooldown > 0 {
+                try? await Task.sleep(nanoseconds: cooldown)
+            }
             guard let self,
                   !Task.isCancelled,
-                  self.automaticPostMachine.generationID == generationID else { return }
-            let effect = self.automaticPostMachine.handle(
-                .initialSubmitDelayElapsed(generationID: generationID)
-            )
-            self.handleAutomaticPostEffect(effect, generationID: generationID)
+                  self.automaticPostMachine.generationID == generationID,
+                  case .waitingForSubmitReadiness = self.automaticPostMachine.state,
+                  self.automaticPostMachine.currentAttempt == attempt else {
+                return
+            }
+            self.requestAutomaticSubmitReadiness(generationID: generationID,
+                                                 attempt: attempt,
+                                                 reason: reason)
         }
     }
 
-    private func scheduleIPRetrySubmit(generationID: UInt64) {
+    private func requestAutomaticSubmitReadiness(generationID: UInt64,
+                                                 attempt: Int,
+                                                 reason: AutomaticPostReadinessReason) {
+        guard automaticPostMachine.generationID == generationID,
+              case .waitingForSubmitReadiness = automaticPostMachine.state,
+              automaticPostMachine.currentAttempt == attempt else {
+            return
+        }
+        guard let deadline = automaticSubmitReadinessDeadline,
+              Date() < deadline else {
+            handleAutomaticSubmitReadinessTimeout(generationID: generationID,
+                                                  attempt: attempt,
+                                                  reason: reason)
+            return
+        }
+        guard let webView else {
+            stopAutomaticPost(.communicationFailure, generationID: generationID)
+            return
+        }
+        webView.evaluateJavaScript(CompactPageModeService.submitReadinessScript) {
+            [weak self] _, error in
+            Task { @MainActor [weak self] in
+                guard let self,
+                      !Task.isCancelled,
+                      self.automaticPostMachine.generationID == generationID,
+                      case .waitingForSubmitReadiness = self.automaticPostMachine.state,
+                      self.automaticPostMachine.currentAttempt == attempt else {
+                    return
+                }
+                if let error,
+                   self.automaticSubmitReadinessLastReason != "EVALUATION_FAILED" {
+                    self.automaticSubmitReadinessLastReason = "EVALUATION_FAILED"
+                    let nsError = error as NSError
+                    self.appendAutomaticEvent(
+                        generationID: generationID,
+                        phase: "READINESS",
+                        event: "EVALUATION_FAILED",
+                        result: "RETRYING",
+                        fields: [
+                            ("ATTEMPT", String(attempt)),
+                            ("REASON", reason.rawValue),
+                            ("ERROR_DOMAIN", nsError.domain),
+                            ("ERROR_CODE", String(nsError.code))
+                        ]
+                    )
+                }
+                guard let deadline = self.automaticSubmitReadinessDeadline,
+                      Date() < deadline else {
+                    self.handleAutomaticSubmitReadinessTimeout(
+                        generationID: generationID,
+                        attempt: attempt,
+                        reason: reason
+                    )
+                    return
+                }
+                self.automaticSubmitReadinessTask = Task { @MainActor [weak self] in
+                    try? await Task.sleep(nanoseconds: 250_000_000)
+                    guard let self,
+                          !Task.isCancelled,
+                          self.automaticPostMachine.generationID == generationID,
+                          case .waitingForSubmitReadiness = self.automaticPostMachine.state,
+                          self.automaticPostMachine.currentAttempt == attempt else {
+                        return
+                    }
+                    self.requestAutomaticSubmitReadiness(generationID: generationID,
+                                                         attempt: attempt,
+                                                         reason: reason)
+                }
+            }
+        }
+    }
+
+    private func handleAutomaticSubmitReadinessTimeout(generationID: UInt64,
+                                                       attempt: Int,
+                                                       reason: AutomaticPostReadinessReason) {
+        guard automaticPostMachine.generationID == generationID,
+              case .waitingForSubmitReadiness = automaticPostMachine.state else {
+            return
+        }
+        appendAutomaticEvent(
+            generationID: generationID,
+            phase: "READINESS",
+            event: "READINESS_TIMEOUT",
+            result: "STOPPED",
+            fields: [
+                ("ATTEMPT", String(attempt)),
+                ("REASON", reason.rawValue)
+            ]
+        )
+        let effect = automaticPostMachine.handle(
+            .submitReadinessTimedOut(generationID: generationID)
+        )
+        handleAutomaticPostEffect(effect, generationID: generationID)
+    }
+
+    private func scheduleSubmitDelay(generationID: UInt64) {
+        automaticSubmitReadinessTask?.cancel()
+        automaticSubmitReadinessTask = nil
+        automaticSubmitReadinessDeadline = nil
+        automaticSubmitReadinessStableSince = nil
         automaticPostPreparationTimer?.cancel()
         automaticPostPreparationTimer = Task { @MainActor [weak self] in
             try? await Task.sleep(nanoseconds: 2_000_000_000)
             guard let self,
                   !Task.isCancelled,
-                  self.automaticPostMachine.generationID == generationID else { return }
-            self.setAutomaticPostStatus(.finalSendAfterIPChange, generationID: generationID)
+                  self.automaticPostMachine.generationID == generationID,
+                  case .waitingToSubmit = self.automaticPostMachine.state else {
+                return
+            }
             let effect = self.automaticPostMachine.handle(
-                .ipSubmitDelayElapsed(generationID: generationID)
+                .initialSubmitDelayElapsed(generationID: generationID)
             )
             self.handleAutomaticPostEffect(effect, generationID: generationID)
         }
@@ -1475,10 +1729,22 @@ final class BrowserViewModel: ObservableObject {
         }
         let isFinalIPAttempt = attempt == AutomaticPostFlowMachine.regularAttemptLimit &&
             automaticPostMachine.ipRetryIsTerminal
-        setAutomaticPostStatus(isFinalIPAttempt ? .finalSendAfterIPChange : .sending,
+        let isContinuousAPAttempt = attempt == AutomaticPostFlowMachine.maximumAttempts &&
+            automaticPostMachine.continuousRetryUsed
+        let submitStatus: AutomaticPostStatus
+        if isContinuousAPAttempt {
+            submitStatus = .finalSendAfterContinuousLimit
+        } else if isFinalIPAttempt {
+            submitStatus = .finalSendAfterIPChange
+        } else {
+            submitStatus = .sending
+        }
+        setAutomaticPostStatus(submitStatus,
                                 generationID: generationID)
         let branch: String
-        if automaticPostMachine.continuousRetryUsed {
+        if isContinuousAPAttempt {
+            branch = "CONTINUOUS_AP_RETRY"
+        } else if automaticPostMachine.continuousRetryUsed {
             branch = "CONTINUOUS_RETRY"
         } else if isFinalIPAttempt || automaticPostMachine.ipRetryIsTerminal {
             branch = "IP_RETRY"
@@ -1520,23 +1786,13 @@ final class BrowserViewModel: ObservableObject {
                 }
                 return
             }
-            if case .waitingForCookieRetry = self.automaticPostMachine.state {
+            guard case .submitting = self.automaticPostMachine.state else {
                 self.appendAutomaticEvent(
                     generationID: generationID,
                     phase: "SUBMIT",
                     event: "CLICK_CALLBACK_IGNORED",
                     result: "IGNORED",
-                    fields: [("REASON", "COOKIE_RETRY_PENDING")]
-                )
-                return
-            }
-            if case .waitingForIPRetry = self.automaticPostMachine.state {
-                self.appendAutomaticEvent(
-                    generationID: generationID,
-                    phase: "SUBMIT",
-                    event: "CLICK_CALLBACK_IGNORED",
-                    result: "IGNORED",
-                    fields: [("REASON", "IP_RETRY_PENDING")]
+                    fields: [("REASON", "SUBMIT_STATE_CHANGED")]
                 )
                 return
             }
@@ -1596,6 +1852,11 @@ final class BrowserViewModel: ObservableObject {
     private func finishAutomaticPost(generationID: UInt64, result: String) {
         guard automaticPostMachine.generationID == generationID else { return }
         automaticPostPreparationTimer?.cancel()
+        automaticSubmitReadinessTask?.cancel()
+        automaticSubmitReadinessTask = nil
+        automaticSubmitReadinessStableSince = nil
+        automaticSubmitReadinessDeadline = nil
+        automaticSubmitReadinessLastReason = nil
         var finalFields = [
             ("ATTEMPT", String(automaticPostMachine.lastAttempt)),
             ("BRANCH", "FINAL"),
@@ -1615,6 +1876,8 @@ final class BrowserViewModel: ObservableObject {
             ), at: 0)
         }
         logStore.append(action: "Automatic Post", fields: finalFields)
+        automaticPostVerificationTask?.cancel()
+        automaticPostVerificationTask = nil
         automaticPostStatusTask?.cancel()
         automaticPostStatusTask = Task { @MainActor [weak self] in
             try? await Task.sleep(nanoseconds: 5_000_000_000)
@@ -1623,6 +1886,10 @@ final class BrowserViewModel: ObservableObject {
                   self.automaticPostMachine.generationID == generationID else { return }
             self.automaticPostStatus = nil
         }
+        clearAutomaticPostDraft()
+    }
+
+    private func clearAutomaticPostDraft() {
         automaticPostDraft = nil
         automaticTriedUAIDs.removeAll()
     }
@@ -1768,6 +2035,10 @@ final class BrowserViewModel: ObservableObject {
                 ]
             )
             self.automaticPostVerificationTask = nil
+            self.setAutomaticPostStatus(.completedUnconfirmed,
+                                        generationID: generationID)
+            self.finishAutomaticPost(generationID: generationID,
+                                     result: "SUCCEEDED_UNCONFIRMED")
         }
     }
 
@@ -1777,9 +2048,24 @@ final class BrowserViewModel: ObservableObject {
         case "handwritingReady": return "HANDWRITING_READY"
         case "postStatus": return "POST_STATUS"
         case "postCompleted": return "POST_COMPLETED"
+        case "submitReadiness": return "SUBMIT_READINESS"
         case "ownPostVisible": return "OWN_POST_VISIBLE"
         case "ownPostObservation": return "OWN_POST_OBSERVATION"
         default: return "OTHER_BRIDGE_EVENT"
+        }
+    }
+
+    private static func safeSubmitReadinessReason(_ reason: String) -> String {
+        switch reason {
+        case "READY": return "READY"
+        case "DOCUMENT_LOADING": return "DOCUMENT_LOADING"
+        case "FORM_MISSING": return "FORM_MISSING"
+        case "COMMENT_FIELD_MISSING": return "COMMENT_FIELD_MISSING"
+        case "SUBMIT_BUTTON_MISSING": return "SUBMIT_BUTTON_MISSING"
+        case "SUBMIT_BUTTON_DISABLED": return "SUBMIT_BUTTON_DISABLED"
+        case "POST_IN_FLIGHT": return "POST_IN_FLIGHT"
+        case "OUTSIDE_TARGET_PAGE": return "OUTSIDE_TARGET_PAGE"
+        default: return "OTHER"
         }
     }
 
