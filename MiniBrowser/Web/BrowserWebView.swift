@@ -53,6 +53,7 @@ struct BrowserWebView: UIViewRepresentable {
         private var timeoutTimer: Timer?
         private weak var attachedWebView: WKWebView?
         private let handwritingImageStore = TargetPageHandwritingImageStore()
+        private var currentPageToken: String?
 
         init(model: BrowserViewModel) {
             self.model = model
@@ -78,26 +79,61 @@ struct BrowserWebView: UIViewRepresentable {
                 return
             }
 
+            let pageToken = body["pageToken"] as? String
+            if let pageToken, model.shouldIgnoreAutomaticPageToken(pageToken) {
+                return
+            }
+            if type != "selectedImage",
+               let pageToken,
+               let currentPageToken,
+               pageToken != currentPageToken {
+                return
+            }
+
             switch type {
             case "selectedImage":
                 guard let dataURL = body["dataURL"] as? String else { return }
                 _ = handwritingImageStore.replace(withDataURL: dataURL)
+                model.setHandwritingImageAvailable(handwritingImageStore.hasImage)
 
             case "pageReady":
+                if let pageToken {
+                    currentPageToken = pageToken
+                }
                 guard handwritingImageStore.hasImage else { return }
                 attachedWebView?.evaluateJavaScript(CanvasImageSessionService.openExistingCanvasScript)
 
             case "canvasReady":
+                guard let pageToken, acceptPageToken(pageToken) else { return }
                 guard let script = handwritingImageStore.restorationScript() else { return }
-                attachedWebView?.evaluateJavaScript(script)
+                attachedWebView?.evaluateJavaScript(script) { [weak self] _, error in
+                    guard let self, error != nil else { return }
+                    self.model.handleHandwritingReady(pageToken: pageToken, ready: false)
+                }
+
+            case "handwritingReady":
+                guard let pageToken,
+                      acceptPageToken(pageToken),
+                      let ready = body["ready"] as? Bool else { return }
+                model.handleHandwritingReady(pageToken: pageToken, ready: ready)
+
+            case "compactReady":
+                guard let pageToken,
+                      acceptPageToken(pageToken),
+                      let hasComment = body["hasComment"] as? Bool,
+                      let canSubmit = body["canSubmit"] as? Bool else { return }
+                model.handleCompactReady(pageToken: pageToken,
+                                         hasComment: hasComment,
+                                         canSubmit: canSubmit)
 
             case "postCompleted":
+                model.handlePostCompleted(pageToken: pageToken)
                 let canvasWasOpen = body["canvasWasOpen"] as? Bool ?? false
                 guard canvasWasOpen || handwritingImageStore.hasImage else { return }
                 attachedWebView?.evaluateJavaScript(CanvasImageSessionService.openExistingCanvasScript)
 
             case "postStatus":
-                model.updateSitePostStatus(body["status"] as? String)
+                model.handlePostStatus(body["status"] as? String, pageToken: pageToken)
 
             default:
                 return
@@ -123,6 +159,7 @@ struct BrowserWebView: UIViewRepresentable {
 
         func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
             startTimeout(for: webView)
+            currentPageToken = nil
             model.navigationStarted()
         }
 
@@ -167,17 +204,14 @@ struct BrowserWebView: UIViewRepresentable {
                      initiatedByFrame frame: WKFrameInfo,
                      completionHandler: @escaping () -> Void) {
             let host = frame.request.url?.host ?? webView.url?.host
-            if WebDialogPolicy.shouldAutoDismissAlert(host: host,
-                                                      message: message) {
-                completionHandler()
-                return
-            }
             if let category = TargetPageAlertClassifier.category(host: host, message: message),
                let host {
-                Task { [weak self] in
-                    guard let self else { return }
-                    await self.model.recordTargetPageAlert(category, host: host)
+                if model.handleTargetPageAlert(category, host: host) == .autoDismiss {
+                    completionHandler()
+                    return
                 }
+            } else {
+                model.handleUnknownJavaScriptAlert()
             }
             let alert = UIAlertController(title: dialogTitle(for: frame, webView: webView),
                                           message: message,
@@ -271,6 +305,15 @@ struct BrowserWebView: UIViewRepresentable {
         private func cancelTimeout() {
             timeoutTimer?.invalidate()
             timeoutTimer = nil
+        }
+
+        private func acceptPageToken(_ token: String?) -> Bool {
+            guard let token, !token.isEmpty else { return false }
+            if let currentPageToken {
+                return currentPageToken == token
+            }
+            currentPageToken = token
+            return true
         }
 
         private func handleFailure(webView: WKWebView, error: Error) {

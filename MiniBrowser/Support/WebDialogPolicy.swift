@@ -16,10 +16,10 @@ enum TargetPageAlertClassifier {
             .components(separatedBy: .whitespacesAndNewlines)
             .joined()
 
-        if normalized.contains("cookieを有効にしてもう一度送信してください") {
+        if normalized == "cookieを有効にしてもう一度送信してください" {
             return .cookieRetryRequired
         }
-        if normalized.contains("あなたのipアドレスからは画像を投稿できません") {
+        if normalized == "あなたのipアドレスからは画像を投稿できません" {
             return .imagePostingRestricted
         }
         return nil

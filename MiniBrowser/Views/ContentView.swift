@@ -25,7 +25,8 @@ struct ContentView: View {
                 .padding(.horizontal, 12)
                 .padding(.bottom, 58)
 
-            SitePostStatusView(status: model.sitePostStatus)
+            SitePostStatusView(status: model.sitePostStatus,
+                               automaticStatus: model.automaticPostStatus)
                 .padding(.bottom, 58)
                 .zIndex(1)
         }

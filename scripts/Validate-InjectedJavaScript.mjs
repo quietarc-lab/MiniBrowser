@@ -8,6 +8,8 @@ if (!projectRoot) {
 
 const sources = [
   ["MiniBrowser/Services/CompactPageModeService.swift", "scriptSource"],
+  ["MiniBrowser/Services/CompactPageModeService.swift", "currentPostStateScript"],
+  ["MiniBrowser/Services/CompactPageModeService.swift", "autoSubmitScript"],
   ["MiniBrowser/Services/CanvasImageSessionService.swift", "scriptSource"],
   ["MiniBrowser/Services/CanvasImageSessionService.swift", "openExistingCanvasScript"],
   ["MiniBrowser/Services/InputAutoZoomPreventionService.swift", "scriptSource"]

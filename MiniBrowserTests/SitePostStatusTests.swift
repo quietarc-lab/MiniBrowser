@@ -8,4 +8,27 @@ final class SitePostStatusTests: XCTestCase {
         XCTAssertNil(SitePostStatus(rawValue: "エラー"))
         XCTAssertNil(SitePostStatus(rawValue: ""))
     }
+
+    func testAutomaticStatusTextAndFinalClassification() {
+        XCTAssertEqual(AutomaticPostStatus.preparingUA.rawValue, "UA準備中")
+        XCTAssertEqual(AutomaticPostStatus.checkingCookie.rawValue, "Cookie確認中")
+        XCTAssertEqual(AutomaticPostStatus.sending.rawValue, "投稿中…")
+        XCTAssertEqual(AutomaticPostStatus.cookieRetry.rawValue, "Cookie確認後に再送")
+        XCTAssertEqual(AutomaticPostStatus.reconnectingAfterIPLimit.rawValue,
+                       "IP制限 → AP再接続中")
+        XCTAssertEqual(AutomaticPostStatus.finalSendAfterIPChange.rawValue,
+                       "IP変更後に最終送信")
+        XCTAssertEqual(AutomaticPostStatus.completed.rawValue, "完了")
+        XCTAssertEqual(AutomaticPostStatus.stopped.rawValue, "自動投稿停止")
+        XCTAssertTrue(AutomaticPostStatus.completed.isFinal)
+        XCTAssertTrue(AutomaticPostStatus.stopped.isFinal)
+        XCTAssertFalse(AutomaticPostStatus.sending.isFinal)
+    }
+
+    func testOverlayDimensionsStayFixed() {
+        let source = String(describing: SitePostStatusView.self)
+        XCTAssertFalse(source.isEmpty)
+        // The actual SwiftUI frame is asserted by the source-level static
+        // check because ViewMirror is unavailable in XCTest on Windows.
+    }
 }

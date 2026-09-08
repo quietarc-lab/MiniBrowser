@@ -20,6 +20,20 @@ enum CanvasImageSessionService {
         window.webkit.messageHandlers.miniBrowserHandwriting;
       if (!handler) return;
 
+      const pageToken = (() => {
+        if (typeof window.__miniBrowserPageToken === "string" &&
+            window.__miniBrowserPageToken.length > 0) {
+          return window.__miniBrowserPageToken;
+        }
+        const token = String(Date.now()) + "-" + String(Math.random());
+        window.__miniBrowserPageToken = token;
+        return token;
+      })();
+
+      function sendNative(payload) {
+        handler.postMessage(Object.assign({ pageToken }, payload));
+      }
+
       const maximumBytes = 3000000;
 
       function captureSelectedImage(input) {
@@ -31,7 +45,7 @@ enum CanvasImageSessionService {
         const reader = new FileReader();
         reader.addEventListener("load", () => {
           if (typeof reader.result !== "string") return;
-          handler.postMessage({ type: "selectedImage", dataURL: reader.result });
+          sendNative({ type: "selectedImage", dataURL: reader.result });
         }, { once: true });
         reader.readAsDataURL(file);
       }
@@ -44,7 +58,7 @@ enum CanvasImageSessionService {
         const canvas = document.querySelector("canvas#oejs");
         if (!canvas || canvas.dataset.minibrowserHandwritingRestoreRequested === "true") return;
         canvas.dataset.minibrowserHandwritingRestoreRequested = "true";
-        handler.postMessage({ type: "canvasReady" });
+        sendNative({ type: "canvasReady" });
       }
 
       const observer = new MutationObserver(notifyCanvasReady);
@@ -52,7 +66,7 @@ enum CanvasImageSessionService {
       notifyCanvasReady();
 
       function notifyPageReady() {
-        handler.postMessage({ type: "pageReady" });
+        sendNative({ type: "pageReady" });
       }
       if (document.readyState === "loading") {
         document.addEventListener("DOMContentLoaded", notifyPageReady, { once: true });
@@ -164,7 +178,21 @@ final class TargetPageHandwritingImageStore {
         return #"""
         (() => {
           const canvas = document.querySelector("canvas#oejs");
-          if (!canvas) return;
+          const handler = window.webkit && window.webkit.messageHandlers &&
+            window.webkit.messageHandlers.miniBrowserHandwriting;
+          const pageToken = window.__miniBrowserPageToken || "";
+          const notifyReady = ready => {
+            if (!handler) return;
+            handler.postMessage({
+              type: "handwritingReady",
+              pageToken,
+              ready: Boolean(ready)
+            });
+          };
+          if (!canvas) {
+            notifyReady(false);
+            return;
+          }
           const source = new Image();
           source.onload = () => {
             let scale = 1;
@@ -174,7 +202,10 @@ final class TargetPageHandwritingImageStore {
             canvas.width = Math.max(1, Math.round(source.width * scale));
             canvas.height = Math.max(1, Math.round(source.height * scale));
             const context = canvas.getContext("2d");
-            if (!context) return;
+            if (!context) {
+              notifyReady(false);
+              return;
+            }
             context.drawImage(source, 0, 0, source.width, source.height,
                               0, 0, canvas.width, canvas.height);
             const x = Math.floor(Math.random() * canvas.width);
@@ -182,7 +213,40 @@ final class TargetPageHandwritingImageStore {
             context.fillStyle = "rgba(" + Math.floor(Math.random() * 256) + "," +
               Math.floor(Math.random() * 256) + "," + Math.floor(Math.random() * 256) + ",1)";
             context.fillRect(x, y, 1, 1);
+
+            const updateBaseForm = () => {
+              const baseForm = document.getElementById("baseform");
+              if (!baseForm) return false;
+              let dataURL;
+              try {
+                dataURL = canvas.toDataURL();
+              } catch (_) {
+                return false;
+              }
+              if ("value" in baseForm) {
+                baseForm.value = dataURL;
+                if ("defaultValue" in baseForm) baseForm.defaultValue = dataURL;
+              } else {
+                baseForm.setAttribute("value", dataURL);
+              }
+              baseForm.dispatchEvent(new Event("input", { bubbles: true }));
+              baseForm.dispatchEvent(new Event("change", { bubbles: true }));
+              return true;
+            };
+
+            const updatePayload = async () => {
+              if (window.tegakiJs && typeof window.tegakiJs.oeUpdate === "function") {
+                try {
+                  await window.tegakiJs.oeUpdate();
+                  return true;
+                } catch (_) {}
+              }
+              return updateBaseForm();
+            };
+
+            updatePayload().then(notifyReady).catch(() => notifyReady(false));
           };
+          source.onerror = () => notifyReady(false);
           source.src = \#(dataURLLiteral);
         })();
         """#

@@ -44,5 +44,13 @@ final class WebDialogPolicyTests: XCTestCase {
             host: "img.2chan.net",
             message: "任意のエラー本文"
         ))
+        XCTAssertNil(TargetPageAlertClassifier.category(
+            host: "img.2chan.net",
+            message: "cookieを有効にしてもう一度送信してください。"
+        ))
+        XCTAssertNil(TargetPageAlertClassifier.category(
+            host: "img.2chan.net",
+            message: "あなたのIPアドレスからは画像を投稿できません（再試行）"
+        ))
     }
 }

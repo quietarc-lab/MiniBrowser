@@ -70,4 +70,22 @@ final class CompactPageModeServiceTests: XCTestCase {
         XCTAssertTrue(script.contains("check the current value immediately"))
         XCTAssertTrue(script.contains("completionDiscoveryObserver.observe(doc.body"))
     }
+
+    func testAutomaticBridgeUsesPageTokenAndExistingButtonClick() {
+        let script = CompactPageModeService.scriptSource
+        XCTAssertTrue(script.contains("__miniBrowserPageToken"))
+        XCTAssertTrue(script.contains("type: \"compactReady\""))
+        XCTAssertTrue(script.contains("notifyCompactReady()"))
+        XCTAssertTrue(script.contains("type: \"postCompleted\""))
+        XCTAssertTrue(script.contains("type: \"postStatus\""))
+
+        let stateScript = CompactPageModeService.currentPostStateScript
+        XCTAssertTrue(stateScript.contains("hasComment"))
+        XCTAssertTrue(stateScript.contains("canSubmit"))
+
+        let submitScript = CompactPageModeService.autoSubmitScript
+        XCTAssertTrue(submitScript.contains("submitButton.click()"))
+        XCTAssertFalse(submitScript.contains("form.submit"))
+        XCTAssertFalse(submitScript.contains("itgkfile"))
+    }
 }

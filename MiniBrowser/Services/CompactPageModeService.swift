@@ -11,6 +11,15 @@ enum CompactPageModeService {
       }
 
       const doc = document;
+      const pageToken = (() => {
+        if (typeof window.__miniBrowserPageToken === "string" &&
+            window.__miniBrowserPageToken.length > 0) {
+          return window.__miniBrowserPageToken;
+        }
+        const token = String(Date.now()) + "-" + String(Math.random());
+        window.__miniBrowserPageToken = token;
+        return token;
+      })();
 
       function initializeCompactPage() {
         const thread = doc.querySelector("div.thre");
@@ -231,6 +240,11 @@ enum CompactPageModeService {
       const nativeMessageHandler = window.webkit && window.webkit.messageHandlers &&
         window.webkit.messageHandlers.miniBrowserHandwriting;
 
+      function sendNative(payload) {
+        if (!nativeMessageHandler) return;
+        nativeMessageHandler.postMessage(Object.assign({ pageToken }, payload));
+      }
+
       function clearEmail() {
         if (!emailInput) return;
         if (emailInput.value !== "") emailInput.value = "";
@@ -358,12 +372,15 @@ enum CompactPageModeService {
         const normalized = text === "…" || text === "完了" ? text : "";
         if (normalized === lastNativePostStatus) return;
         lastNativePostStatus = normalized;
-        if (nativeMessageHandler) {
-          nativeMessageHandler.postMessage({
-            type: "postStatus",
-            status: normalized
-          });
-        }
+        sendNative({ type: "postStatus", status: normalized });
+      }
+
+      function notifyCompactReady() {
+        sendNative({
+          type: "compactReady",
+          hasComment: Boolean(textarea && String(textarea.value || "").trim()),
+          canSubmit: Boolean(submitButton && submitButton.isConnected)
+        });
       }
 
       function restoreSubmittedDraft() {
@@ -386,12 +403,10 @@ enum CompactPageModeService {
         const status = doc.getElementById("retmestip");
         if (!status || String(status.textContent || "").trim() !== "完了") return;
         postCompletionReported = true;
-        if (nativeMessageHandler) {
-          nativeMessageHandler.postMessage({
-            type: "postCompleted",
-            canvasWasOpen: canvasWasOpenAtSubmission
-          });
-        }
+        sendNative({
+          type: "postCompleted",
+          canvasWasOpen: canvasWasOpenAtSubmission
+        });
       }
 
       function capturePostState() {
@@ -409,12 +424,14 @@ enum CompactPageModeService {
       if (textarea && !textarea.dataset.minibrowserDraftTracking) {
         textarea.dataset.minibrowserDraftTracking = "true";
         textarea.addEventListener("input", event => {
-          if (!draftEnabled) return;
-          if (event.isTrusted) {
-            userEditedAfterSubmission = true;
-            submittedDraft = null;
+          if (draftEnabled) {
+            if (event.isTrusted) {
+              userEditedAfterSubmission = true;
+              submittedDraft = null;
+            }
+            saveDraft();
           }
-          saveDraft();
+          notifyCompactReady();
         }, true);
       }
 
@@ -730,6 +747,7 @@ enum CompactPageModeService {
       reconcileAndRender();
         const responseObserver = new MutationObserver(() => reconcileAndRender());
         responseObserver.observe(thread, { childList: true, subtree: true });
+        notifyCompactReady();
         return true;
       }
 
@@ -754,4 +772,46 @@ enum CompactPageModeService {
                                               injectionTime: .atDocumentEnd,
                                               forMainFrameOnly: true))
     }
+
+    static let currentPostStateScript = #"""
+    (() => {
+      "use strict";
+      if (location.hostname !== "img.2chan.net" ||
+          !/^\/[^/]+\/res\/\d+\.htm$/.test(location.pathname)) {
+        return { eligible: false, hasComment: false, canSubmit: false };
+      }
+      const form = Array.from(document.forms).find(candidate =>
+        candidate.querySelector('textarea[name="com"]')
+      );
+      const textarea = form && form.querySelector('textarea[name="com"]');
+      const submitButton = form && Array.from(form.querySelectorAll(
+        'input[type="submit"], button[type="submit"]'
+      )).find(button => /返信|送信/.test(button.value || button.textContent || ""));
+      return {
+        eligible: true,
+        hasComment: Boolean(textarea && String(textarea.value || "").trim()),
+        canSubmit: Boolean(submitButton)
+      };
+    })();
+    """#
+
+    static let autoSubmitScript = #"""
+    (() => {
+      "use strict";
+      if (location.hostname !== "img.2chan.net" ||
+          !/^\/[^/]+\/res\/\d+\.htm$/.test(location.pathname)) {
+        return false;
+      }
+      const form = Array.from(document.forms).find(candidate =>
+        candidate.querySelector('textarea[name="com"]')
+      );
+      if (!form) return false;
+      const submitButton = Array.from(form.querySelectorAll(
+        'input[type="submit"], button[type="submit"]'
+      )).find(button => /返信|送信/.test(button.value || button.textContent || ""));
+      if (!(submitButton instanceof HTMLElement)) return false;
+      submitButton.click();
+      return true;
+    })();
+    """#
 }
