@@ -24,6 +24,10 @@ struct ContentView: View {
             ToastStackView(toasts: model.toasts)
                 .padding(.horizontal, 12)
                 .padding(.bottom, 58)
+
+            SitePostStatusView(status: model.sitePostStatus)
+                .padding(.bottom, 58)
+                .zIndex(1)
         }
         .ignoresSafeArea(.keyboard, edges: .bottom)
         .task {

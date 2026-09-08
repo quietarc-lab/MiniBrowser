@@ -96,6 +96,9 @@ struct BrowserWebView: UIViewRepresentable {
                 guard canvasWasOpen || handwritingImageStore.hasImage else { return }
                 attachedWebView?.evaluateJavaScript(CanvasImageSessionService.openExistingCanvasScript)
 
+            case "postStatus":
+                model.updateSitePostStatus(body["status"] as? String)
+
             default:
                 return
             }

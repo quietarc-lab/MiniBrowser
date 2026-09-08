@@ -2,12 +2,12 @@ import XCTest
 @testable import MiniBrowser
 
 final class WebDialogPolicyTests: XCTestCase {
-    func testAutoDismissesOnlyExactTargetPageCookieRetryAlert() {
-        XCTAssertTrue(WebDialogPolicy.shouldAutoDismissAlert(
+    func testSiteAlertsAreNeverAutoDismissed() {
+        XCTAssertFalse(WebDialogPolicy.shouldAutoDismissAlert(
             host: "img.2chan.net",
             message: "cookieを有効にしてもう一度送信してください"
         ))
-        XCTAssertTrue(WebDialogPolicy.shouldAutoDismissAlert(
+        XCTAssertFalse(WebDialogPolicy.shouldAutoDismissAlert(
             host: "IMG.2CHAN.NET",
             message: "cookieを有効にして\nもう一度送信してください"
         ))

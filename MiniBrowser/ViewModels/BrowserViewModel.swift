@@ -20,6 +20,7 @@ final class BrowserViewModel: ObservableObject {
     @Published private(set) var isAPRunning = false
     @Published private(set) var isIdentityRefreshInProgress = false
     @Published private(set) var toasts: [ToastMessage] = []
+    @Published private(set) var sitePostStatus: SitePostStatus? = nil
 
     let bookmarkStore: BookmarkStore
 
@@ -224,7 +225,12 @@ final class BrowserViewModel: ObservableObject {
 
     func navigationStarted() {
         isLoading = true
+        sitePostStatus = nil
         refreshNavigationState()
+    }
+
+    func updateSitePostStatus(_ rawStatus: String?) {
+        sitePostStatus = rawStatus.flatMap(SitePostStatus.init(rawValue:))
     }
 
     func navigationCommitted(url: URL?) {

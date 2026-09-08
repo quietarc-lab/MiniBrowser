@@ -228,6 +228,9 @@ enum CompactPageModeService {
         'input[type="submit"], button[type="submit"]'
       )).find(button => /返信|送信/.test(button.value || button.textContent || ""));
 
+      const nativeMessageHandler = window.webkit && window.webkit.messageHandlers &&
+        window.webkit.messageHandlers.miniBrowserHandwriting;
+
       function clearEmail() {
         if (!emailInput) return;
         if (emailInput.value !== "") emailInput.value = "";
@@ -347,6 +350,21 @@ enum CompactPageModeService {
       let userEditedAfterSubmission = false;
       let canvasWasOpenAtSubmission = false;
       let postCompletionReported = false;
+      let lastNativePostStatus = null;
+
+      function notifyNativePostStatus() {
+        const status = doc.getElementById("retmestip");
+        const text = status ? String(status.textContent || "").trim() : "";
+        const normalized = text === "…" || text === "完了" ? text : "";
+        if (normalized === lastNativePostStatus) return;
+        lastNativePostStatus = normalized;
+        if (nativeMessageHandler) {
+          nativeMessageHandler.postMessage({
+            type: "postStatus",
+            status: normalized
+          });
+        }
+      }
 
       function restoreSubmittedDraft() {
         if (!draftEnabled || !textarea || submittedDraft === null ||
@@ -368,10 +386,8 @@ enum CompactPageModeService {
         const status = doc.getElementById("retmestip");
         if (!status || String(status.textContent || "").trim() !== "完了") return;
         postCompletionReported = true;
-        const handler = window.webkit && window.webkit.messageHandlers &&
-          window.webkit.messageHandlers.miniBrowserHandwriting;
-        if (handler) {
-          handler.postMessage({
+        if (nativeMessageHandler) {
+          nativeMessageHandler.postMessage({
             type: "postCompleted",
             canvasWasOpen: canvasWasOpenAtSubmission
           });
@@ -434,6 +450,7 @@ enum CompactPageModeService {
         clearEmail();
         disableFormPositionToggle();
         restoreSubmittedDraft();
+        notifyNativePostStatus();
         notifyPostCompletion();
       });
       formObserver.observe(form, { childList: true, subtree: true, attributes: true });
@@ -445,7 +462,10 @@ enum CompactPageModeService {
         const status = doc.getElementById("retmestip");
         if (!status || status.dataset.minibrowserCompletionObserver === "true") return;
         status.dataset.minibrowserCompletionObserver = "true";
-        const completionObserver = new MutationObserver(() => notifyPostCompletion());
+        const completionObserver = new MutationObserver(() => {
+          notifyNativePostStatus();
+          notifyPostCompletion();
+        });
         completionObserver.observe(status, {
           childList: true,
           subtree: true,
@@ -454,12 +474,14 @@ enum CompactPageModeService {
         // The site can create and populate #retmestip in the same task. In
         // that case the observer sees only the already-final "完了" value,
         // so check the current value immediately after attaching it.
+        notifyNativePostStatus();
         notifyPostCompletion();
       }
 
       observePostCompletionStatus();
       const completionDiscoveryObserver = new MutationObserver(() => {
         observePostCompletionStatus();
+        notifyNativePostStatus();
       });
       if (doc.body) {
         completionDiscoveryObserver.observe(doc.body, { childList: true, subtree: true });
