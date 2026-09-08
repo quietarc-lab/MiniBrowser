@@ -508,7 +508,7 @@ final class BrowserViewModel: ObservableObject {
 
         let alert: AutomaticPostAlert
         switch category {
-        case .cookieRequired:
+        case .cookieRetryRequired:
             alert = .cookieRetryRequired
         case .imagePostingRestricted:
             alert = .imagePostingRestricted
