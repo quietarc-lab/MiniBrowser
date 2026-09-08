@@ -37,6 +37,12 @@ struct ThreadListView: View {
                     .lineLimit(1)
             }
 
+            Button(action: model.resetOpenHistory) {
+                Image(systemName: "arrow.counterclockwise")
+            }
+            .frame(width: 28, height: 28)
+            .accessibilityLabel("閲覧履歴を消去")
+
             Button(action: model.refresh) {
                 if model.isRefreshing {
                     ProgressView()

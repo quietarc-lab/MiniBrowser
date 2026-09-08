@@ -28,6 +28,33 @@ final class ThreadListViewModelTests: XCTestCase {
         XCTAssertEqual(restoredModel.openCount(for: item), 2)
     }
 
+    func testResetOpenHistoryClearsAndPersistsEmptyState() {
+        let suiteName = "ThreadListViewModelTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let item = ThreadListItem(
+            id: "9876543210",
+            threadURL: URL(string: "https://img.2chan.net/b/res/9876543210.htm")!,
+            thumbnailURL: URL(string: "https://img.2chan.net/b/cat/987s.jpg")!,
+            replyCount: 10,
+            thumbnailData: nil,
+            openerText: "本文"
+        )
+
+        let model = ThreadListViewModel(defaults: defaults)
+        model.recordOpen(item)
+        model.recordOpen(item)
+        XCTAssertEqual(model.openCount(for: item), 2)
+
+        model.resetOpenHistory()
+
+        XCTAssertTrue(model.openCounts.isEmpty)
+        XCTAssertEqual(model.openCount(for: item), 0)
+        let restoredModel = ThreadListViewModel(defaults: defaults)
+        XCTAssertEqual(restoredModel.openCount(for: item), 0)
+    }
+
     func testListRefreshPreservesMatchingThumbnailAndRetriesChangedImage() {
         let originalURL = URL(string: "https://img.2chan.net/b/cat/123s.jpg")!
         let item = ThreadListItem(

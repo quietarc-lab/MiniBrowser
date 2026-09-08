@@ -145,6 +145,11 @@ final class ThreadListViewModel: ObservableObject {
         openCounts[item.id, default: 0]
     }
 
+    func resetOpenHistory() {
+        openCounts = [:]
+        defaults.removeObject(forKey: Keys.openCounts)
+    }
+
     private func loadThumbnails(for loaded: [ThreadListItem],
                                 sort: ThreadListSort) async {
         let unresolved = loaded.filter { item in
