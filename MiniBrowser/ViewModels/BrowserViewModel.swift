@@ -270,6 +270,7 @@ final class BrowserViewModel: ObservableObject {
             isUAChanging = false
             return
         }
+        isUAChanging = true
         pendingUAChangeGeneration = nil
 
         if newAutomaticSession {
