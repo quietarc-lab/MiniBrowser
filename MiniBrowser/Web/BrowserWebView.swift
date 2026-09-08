@@ -1,3 +1,4 @@
+import Foundation
 import SwiftUI
 import UIKit
 import WebKit
@@ -81,12 +82,16 @@ struct BrowserWebView: UIViewRepresentable {
 
             let pageToken = body["pageToken"] as? String
             if let pageToken, model.shouldIgnoreAutomaticPageToken(pageToken) {
+                model.recordAutomaticBridgeIgnored(type: type,
+                                                    reason: "STALE_PAGE_TOKEN")
                 return
             }
             if type != "selectedImage",
                let pageToken,
                let currentPageToken,
                pageToken != currentPageToken {
+                model.recordAutomaticBridgeIgnored(type: type,
+                                                    reason: "CURRENT_PAGE_TOKEN_MISMATCH")
                 return
             }
 
@@ -104,7 +109,16 @@ struct BrowserWebView: UIViewRepresentable {
                 attachedWebView?.evaluateJavaScript(CanvasImageSessionService.openExistingCanvasScript)
 
             case "canvasReady":
-                guard let pageToken, acceptPageToken(pageToken) else { return }
+                guard let pageToken else {
+                    model.recordAutomaticBridgeIgnored(type: type,
+                                                        reason: "MISSING_PAGE_TOKEN")
+                    return
+                }
+                guard acceptPageToken(pageToken) else {
+                    model.recordAutomaticBridgeIgnored(type: type,
+                                                        reason: "CURRENT_PAGE_TOKEN_MISMATCH")
+                    return
+                }
                 guard let script = handwritingImageStore.restorationScript() else { return }
                 attachedWebView?.evaluateJavaScript(script) { [weak self] _, error in
                     guard let self, error != nil else { return }
@@ -112,15 +126,31 @@ struct BrowserWebView: UIViewRepresentable {
                 }
 
             case "handwritingReady":
-                guard let pageToken,
-                      acceptPageToken(pageToken),
-                      let ready = body["ready"] as? Bool else { return }
+                guard let pageToken else {
+                    model.recordAutomaticBridgeIgnored(type: type,
+                                                        reason: "MISSING_PAGE_TOKEN")
+                    return
+                }
+                guard acceptPageToken(pageToken) else {
+                    model.recordAutomaticBridgeIgnored(type: type,
+                                                        reason: "CURRENT_PAGE_TOKEN_MISMATCH")
+                    return
+                }
+                guard let ready = body["ready"] as? Bool else { return }
                 model.handleHandwritingReady(pageToken: pageToken, ready: ready)
 
             case "compactReady":
-                guard let pageToken,
-                      acceptPageToken(pageToken),
-                      let hasComment = body["hasComment"] as? Bool,
+                guard let pageToken else {
+                    model.recordAutomaticBridgeIgnored(type: type,
+                                                        reason: "MISSING_PAGE_TOKEN")
+                    return
+                }
+                guard acceptPageToken(pageToken) else {
+                    model.recordAutomaticBridgeIgnored(type: type,
+                                                        reason: "CURRENT_PAGE_TOKEN_MISMATCH")
+                    return
+                }
+                guard let hasComment = body["hasComment"] as? Bool,
                       let canSubmit = body["canSubmit"] as? Bool else { return }
                 model.handleCompactReady(pageToken: pageToken,
                                          hasComment: hasComment,
@@ -134,6 +164,52 @@ struct BrowserWebView: UIViewRepresentable {
 
             case "postStatus":
                 model.handlePostStatus(body["status"] as? String, pageToken: pageToken)
+
+            case "ownPostVisible":
+                guard let pageToken else {
+                    model.recordAutomaticBridgeIgnored(type: type,
+                                                        reason: "MISSING_PAGE_TOKEN")
+                    return
+                }
+                let matchedCount = integerValue(body["matchedCount"])
+                let pendingCount = integerValue(body["pendingCount"])
+                let responseCount = integerValue(body["responseCount"])
+                let newResponseCount = integerValue(body["newResponseCount"])
+                guard let matchedCount,
+                      let pendingCount,
+                      let responseCount,
+                      let newResponseCount else { return }
+                model.handleOwnPostVisible(
+                    pageToken: pageToken,
+                    matchedCount: matchedCount,
+                    pendingCount: pendingCount,
+                    responseCount: responseCount,
+                    newResponseCount: newResponseCount,
+                    matchMethod: body["matchMethod"] as? String
+                )
+
+            case "ownPostObservation":
+                guard let pageToken else {
+                    model.recordAutomaticBridgeIgnored(type: type,
+                                                        reason: "MISSING_PAGE_TOKEN")
+                    return
+                }
+                let pendingCount = integerValue(body["pendingCount"])
+                let responseCount = integerValue(body["responseCount"])
+                let newResponseCount = integerValue(body["newResponseCount"])
+                let matchedCount = integerValue(body["matchedCount"])
+                guard let pendingCount,
+                      let responseCount,
+                      let newResponseCount,
+                      let matchedCount else { return }
+                model.handleOwnPostObservation(
+                    pageToken: pageToken,
+                    pendingCount: pendingCount,
+                    responseCount: responseCount,
+                    newResponseCount: newResponseCount,
+                    matchedCount: matchedCount,
+                    matchMethod: body["matchMethod"] as? String
+                )
 
             default:
                 return
@@ -332,6 +408,16 @@ struct BrowserWebView: UIViewRepresentable {
             }
             currentPageToken = token
             return true
+        }
+
+        private func integerValue(_ value: Any?) -> Int? {
+            if let value = value as? Int {
+                return value
+            }
+            if let value = value as? NSNumber {
+                return value.intValue
+            }
+            return nil
         }
 
         private func handleFailure(webView: WKWebView, error: Error) {

@@ -48,10 +48,22 @@ final class BrowserViewModel: ObservableObject {
     private var automaticCookieRelatedCount: Int?
     private var automaticCookieCountDelta: Int?
     private var automaticAPResult = "NOT_REQUESTED"
+    private var automaticEventSequence: UInt64 = 0
+    private var automaticGenerationStartedAt: [UInt64: Date] = [:]
+    private var automaticPostAccepted = false
+    private var automaticOwnResponseConfirmed = false
+    private var automaticAcceptedPageToken: String?
+    private var automaticPostVerificationTask: Task<Void, Never>?
 
     private struct AutomaticPostDraft {
         let hasComment: Bool
         let hasImage: Bool
+    }
+
+    private struct AutomaticLogContext {
+        let generationID: UInt64
+        let sequence: UInt64
+        let elapsedMilliseconds: Int
     }
 
     private struct PendingCookieRefresh {
@@ -312,16 +324,33 @@ final class BrowserViewModel: ObservableObject {
                                            oldPageToken: oldPageToken,
                                            hasComment: hasComment,
                                            hasImage: hasImage)
+            beginAutomaticGenerationLogging(generationID: generationID)
             setAutomaticPostStatus(.preparingUA, generationID: generationID)
             startAutomaticPostPreparationTimeout(generationID: generationID)
         }
 
         showToast("UA変更後にCookie更新とAP再接続を開始します", kind: .success)
-        logStore.append(action: "User Agent Change", fields: [
+        var userAgentFields = [
             ("URL", LogSanitizer.url(pageURL)),
             ("UA", "\(selectedUAIndex + 1)/\(BrowserUserAgent.all.count) \(currentUserAgent.name)"),
+            ("FLOW_MODE", automatic && !readError ? "AUTOMATIC" : "MANUAL"),
+            ("AUTO_CANDIDATE", automatic ? "YES" : "NO"),
+            ("READ_STATE", readError ? "FAILED" : "OK"),
+            ("HAS_COMMENT", hasComment ? "YES" : "NO"),
+            ("HAS_IMAGE", hasImage ? "YES" : "NO"),
+            ("TARGET_PAGE", Self.isTargetThreadURL(pageURL) ? "YES" : "NO"),
             ("RESULT", "CHANGED")
-        ])
+        ]
+        if automatic && !readError,
+           let context = automaticLogContext(generationID: generationID) {
+            userAgentFields.insert(contentsOf: automaticLogMetadata(
+                context,
+                phase: "FLOW",
+                event: "UA_CHANGED",
+                result: "CHANGED"
+            ), at: 0)
+        }
+        logStore.append(action: "User Agent Change", fields: userAgentFields)
 
         Task { [weak self] in
             await self?.deleteRelatedCookiesForRefresh(
@@ -444,7 +473,27 @@ final class BrowserViewModel: ObservableObject {
             hasComment: hasComment,
             canSubmit: canSubmit
         ))
-        guard automaticPostMachine.pageToken == pageToken else { return }
+        guard automaticPostMachine.pageToken == pageToken else {
+            appendAutomaticEvent(
+                generationID: generationID,
+                phase: "BRIDGE",
+                event: "COMPACT_READY",
+                result: "IGNORED",
+                fields: [("PAGE_TOKEN_STATE", "STALE_OR_MISMATCH")]
+            )
+            return
+        }
+        appendAutomaticEvent(
+            generationID: generationID,
+            phase: "PREPARATION",
+            event: "COMPACT_READY",
+            result: "ACCEPTED",
+            fields: [
+                ("PAGE_TOKEN_STATE", "MATCH"),
+                ("HAS_COMMENT", hasComment ? "YES" : "NO"),
+                ("CAN_SUBMIT", canSubmit ? "YES" : "NO")
+            ]
+        )
         latestCompactReady = (pageToken, hasComment, canSubmit)
         handleAutomaticPostEffect(effect, generationID: generationID)
     }
@@ -457,22 +506,68 @@ final class BrowserViewModel: ObservableObject {
             pageToken: pageToken,
             ready: ready
         ))
+        guard automaticPostMachine.pageToken == pageToken else {
+            appendAutomaticEvent(
+                generationID: generationID,
+                phase: "BRIDGE",
+                event: "HANDWRITING_READY",
+                result: "IGNORED",
+                fields: [("PAGE_TOKEN_STATE", "STALE_OR_MISMATCH")]
+            )
+            return
+        }
+        appendAutomaticEvent(
+            generationID: generationID,
+            phase: "PREPARATION",
+            event: "HANDWRITING_READY",
+            result: ready ? "ACCEPTED" : "FAILED",
+            fields: [("PAGE_TOKEN_STATE", "MATCH")]
+        )
         handleAutomaticPostEffect(effect, generationID: generationID)
     }
 
     func handlePostStatus(_ rawStatus: String?, pageToken: String?) {
         if automaticPostMachine.isActive {
-            guard let pageToken,
-                  automaticPostMachine.pageToken == pageToken else { return }
+            guard let pageToken else {
+                recordAutomaticBridgeIgnored(type: "postStatus",
+                                              reason: "MISSING_PAGE_TOKEN")
+                return
+            }
+            guard automaticPostMachine.pageToken == pageToken else {
+                recordAutomaticBridgeIgnored(type: "postStatus",
+                                              reason: "STALE_OR_MISMATCH")
+                return
+            }
         }
         updateSitePostStatus(rawStatus)
         guard automaticPostMachine.isActive,
               let generationID = automaticPostMachine.generationID,
               let pageToken,
               automaticPostMachine.pageToken == pageToken else { return }
+        let statusName: String
+        if rawStatus == SitePostStatus.sending.rawValue {
+            statusName = "SENDING"
+        } else if rawStatus == SitePostStatus.completed.rawValue {
+            statusName = "COMPLETED"
+        } else {
+            statusName = "OTHER"
+        }
+        appendAutomaticEvent(
+            generationID: generationID,
+            phase: "BRIDGE",
+            event: "POST_STATUS",
+            result: "RECEIVED",
+            fields: [
+                ("PAGE_TOKEN_STATE", "MATCH"),
+                ("STATUS", statusName)
+            ]
+        )
         if rawStatus == SitePostStatus.sending.rawValue {
             setAutomaticPostStatus(.sending, generationID: generationID)
         } else if rawStatus == SitePostStatus.completed.rawValue {
+            recordAutomaticPostAccepted(generationID: generationID,
+                                         pageToken: pageToken,
+                                         source: "POST_STATUS")
             let effect = automaticPostMachine.handle(.postCompleted(generationID: generationID))
             handleAutomaticPostEffect(effect, generationID: generationID)
         }
@@ -480,11 +575,108 @@ final class BrowserViewModel: ObservableObject {
 
     func handlePostCompleted(pageToken: String?) {
         guard automaticPostMachine.isActive,
-              let generationID = automaticPostMachine.generationID,
-              let pageToken,
-              automaticPostMachine.pageToken == pageToken else { return }
+              let generationID = automaticPostMachine.generationID else { return }
+        guard let pageToken else {
+            recordAutomaticBridgeIgnored(type: "postCompleted",
+                                          reason: "MISSING_PAGE_TOKEN")
+            return
+        }
+        guard automaticPostMachine.pageToken == pageToken else {
+            recordAutomaticBridgeIgnored(type: "postCompleted",
+                                          reason: "STALE_OR_MISMATCH")
+            return
+        }
+        appendAutomaticEvent(
+            generationID: generationID,
+            phase: "BRIDGE",
+            event: "POST_COMPLETED",
+            result: "RECEIVED",
+            fields: [("PAGE_TOKEN_STATE", "MATCH")]
+        )
+        recordAutomaticPostAccepted(generationID: generationID,
+                                    pageToken: pageToken,
+                                    source: "POST_COMPLETED")
         let effect = automaticPostMachine.handle(.postCompleted(generationID: generationID))
         handleAutomaticPostEffect(effect, generationID: generationID)
+    }
+
+    func handleOwnPostVisible(pageToken: String?,
+                              matchedCount: Int,
+                              pendingCount: Int,
+                              responseCount: Int,
+                              newResponseCount: Int,
+                              matchMethod: String?) {
+        let canAcceptVisibleResponse: Bool
+        switch automaticPostMachine.state {
+        case .submitting:
+            canAcceptVisibleResponse = true
+        case .succeeded:
+            canAcceptVisibleResponse = automaticPostAccepted &&
+                automaticPostVerificationTask != nil
+        case .idle, .preparing, .waitingToSubmit, .waitingForCookieRetry,
+             .waitingForIPRetry, .waitingForContinuousRetry, .stopped:
+            canAcceptVisibleResponse = false
+        }
+        guard canAcceptVisibleResponse,
+              let generationID = automaticPostMachine.generationID,
+              let pageToken else {
+            return
+        }
+        guard automaticPostMachine.pageToken == pageToken else {
+            recordAutomaticBridgeIgnored(type: "ownPostVisible",
+                                          reason: "STALE_OR_MISMATCH")
+            return
+        }
+        automaticOwnResponseConfirmed = true
+        automaticPostVerificationTask?.cancel()
+        automaticPostVerificationTask = nil
+        appendAutomaticEvent(
+            generationID: generationID,
+            phase: "VERIFICATION",
+            event: "OWN_RESPONSE_CONFIRMED",
+            result: "DOM_MATCHED",
+            fields: [
+                ("PAGE_TOKEN_STATE", "MATCH"),
+                ("MATCHED_COUNT", String(max(0, matchedCount))),
+                ("PENDING_POST_COUNT", String(max(0, pendingCount))),
+                ("THREAD_RESPONSE_COUNT", String(max(0, responseCount))),
+                ("NEW_RESPONSE_COUNT", String(max(0, newResponseCount))),
+                ("MATCH_METHOD", Self.safeMatchMethod(matchMethod)),
+                ("FINAL_RESULT", "ACCEPTED_VISIBLE")
+            ]
+        )
+    }
+
+    func handleOwnPostObservation(pageToken: String?,
+                                  pendingCount: Int,
+                                  responseCount: Int,
+                                  newResponseCount: Int,
+                                  matchedCount: Int,
+                                  matchMethod: String?) {
+        guard automaticPostMachine.isActive,
+              let generationID = automaticPostMachine.generationID,
+              let pageToken else {
+            return
+        }
+        guard automaticPostMachine.pageToken == pageToken else {
+            recordAutomaticBridgeIgnored(type: "ownPostObservation",
+                                          reason: "STALE_OR_MISMATCH")
+            return
+        }
+        appendAutomaticEvent(
+            generationID: generationID,
+            phase: "VERIFICATION",
+            event: "DOM_OBSERVATION",
+            result: "PENDING",
+            fields: [
+                ("PAGE_TOKEN_STATE", "MATCH"),
+                ("PENDING_POST_COUNT", String(max(0, pendingCount))),
+                ("THREAD_RESPONSE_COUNT", String(max(0, responseCount))),
+                ("NEW_RESPONSE_COUNT", String(max(0, newResponseCount))),
+                ("MATCHED_COUNT", String(max(0, matchedCount))),
+                ("MATCH_METHOD", Self.safeMatchMethod(matchMethod))
+            ]
+        )
     }
 
     func navigationCommitted(url: URL?) {
@@ -596,16 +788,23 @@ final class BrowserViewModel: ObservableObject {
             : nil
         let alertUA = "\(selectedUAIndex + 1)/\(BrowserUserAgent.all.count) \(currentUserAgent.name)"
         let alertURL = currentURL
-        Task { [weak self] in
-            await self?.recordTargetPageAlert(category,
-                                              host: host,
-                                              automaticGenerationID: alertGenerationID,
-                                              userAgent: alertUA,
-                                              url: alertURL)
+        let alertContext = alertGenerationID.flatMap {
+            automaticLogContext(generationID: $0)
         }
 
         guard automaticPostMachine.isActive,
               let generationID = automaticPostMachine.generationID else {
+            Task { [weak self] in
+                await self?.recordTargetPageAlert(
+                    category,
+                    host: host,
+                    automaticGenerationID: nil,
+                    logContext: nil,
+                    disposition: "SHOWN",
+                    userAgent: alertUA,
+                    url: alertURL
+                )
+            }
             return .showNormally
         }
 
@@ -626,6 +825,18 @@ final class BrowserViewModel: ObservableObject {
         }
         let result = automaticPostMachine.handleAlert(alert, generationID: generationID)
         handleAutomaticPostEffect(result.effect, generationID: generationID)
+        let alertDisposition = result.autoDismiss ? "AUTO_DISMISSED" : "SHOWN"
+        Task { [weak self] in
+            await self?.recordTargetPageAlert(
+                category,
+                host: host,
+                automaticGenerationID: alertGenerationID,
+                logContext: alertContext,
+                disposition: alertDisposition,
+                userAgent: alertUA,
+                url: alertURL
+            )
+        }
         if result.autoDismiss {
             switch alert {
             case .cookieRetryRequired:
@@ -675,7 +886,30 @@ final class BrowserViewModel: ObservableObject {
     }
 
     func handleUnknownJavaScriptAlert() {
+        if let generationID = automaticPostMachine.generationID,
+           automaticPostMachine.isActive {
+            appendAutomaticEvent(
+                generationID: generationID,
+                phase: "ALERT",
+                event: "UNKNOWN_ALERT",
+                result: "STOPPED",
+                fields: [("DISPOSITION", "SHOWN")]
+            )
+        }
         stopAutomaticPost(.unknownAlert, generationID: automaticPostMachine.generationID)
+    }
+
+    // Keep the original test/debug entry point available for manual alert
+    // observation while the automatic path supplies generation metadata.
+    func recordTargetPageAlert(_ category: TargetPageAlertCategory,
+                               host: String) async {
+        await recordTargetPageAlert(category,
+                                    host: host,
+                                    automaticGenerationID: nil,
+                                    logContext: nil,
+                                    disposition: "SHOWN",
+                                    userAgent: "\(selectedUAIndex + 1)/\(BrowserUserAgent.all.count) \(currentUserAgent.name)",
+                                    url: currentURL)
     }
 
     func recordTargetPageAlert(_ category: TargetPageAlertCategory,
@@ -683,6 +917,24 @@ final class BrowserViewModel: ObservableObject {
                                automaticGenerationID: UInt64?,
                                userAgent: String,
                                url: URL?) async {
+        await recordTargetPageAlert(category,
+                                    host: host,
+                                    automaticGenerationID: automaticGenerationID,
+                                    logContext: automaticGenerationID.flatMap {
+                                        automaticLogContext(generationID: $0)
+                                    },
+                                    disposition: automaticGenerationID == nil ? "SHOWN" : "OBSERVED",
+                                    userAgent: userAgent,
+                                    url: url)
+    }
+
+    private func recordTargetPageAlert(_ category: TargetPageAlertCategory,
+                                       host: String,
+                                       automaticGenerationID: UInt64?,
+                                       logContext: AutomaticLogContext?,
+                                       disposition: String,
+                                       userAgent: String,
+                                       url: URL?) async {
         guard let store = webView?.configuration.websiteDataStore.httpCookieStore else { return }
         let normalizedHost = host.lowercased()
         let cookies = await store.miniBrowserAllCookies()
@@ -700,16 +952,28 @@ final class BrowserViewModel: ObservableObject {
 
         // Deliberately record only a known alert category and aggregate counts.
         // Cookie names, values, and the site-provided message stay out of the log.
-        logStore.append(action: "Site Post Alert", fields: [
+        var fields = [
             ("URL", LogSanitizer.url(url)),
             ("DOMAIN", normalizedHost),
             ("UA", userAgent),
             ("ALERT_CATEGORY", category.rawValue),
             ("RELATED_COOKIE_COUNT", String(relatedCount)),
             ("COOKIE_COUNT_DELTA", previousCount.map { String(relatedCount - $0) } ?? "NO_BASELINE"),
+            ("COOKIE_SAMPLE_PHASE", "ALERT"),
             ("POST_COOKIE", "UNVERIFIED"),
+            ("FLOW_MODE", automaticGenerationID == nil ? "MANUAL" : "AUTOMATIC"),
+            ("DISPOSITION", disposition),
             ("RESULT", "OBSERVED")
-        ])
+        ]
+        if let logContext {
+            fields.insert(contentsOf: automaticLogMetadata(
+                logContext,
+                phase: "ALERT",
+                event: category.rawValue,
+                result: "OBSERVED"
+            ), at: 0)
+        }
+        logStore.append(action: "Site Post Alert", fields: fields)
     }
 
     private func deleteRelatedCookiesForRefresh(identityRefresh: Bool,
@@ -858,7 +1122,9 @@ final class BrowserViewModel: ObservableObject {
                          before: pending.beforeCount,
                          deleted: pending.deletedCount,
                          after: after.count,
-                         result: reloadObserved ? "RELOADED_POST_COOKIE_UNVERIFIED" : "FAILED")
+                         result: reloadObserved ? "RELOADED_POST_COOKIE_UNVERIFIED" : "FAILED",
+                         automaticGenerationID: pending.automaticGenerationID,
+                         phase: "AFTER_RELOAD")
         if pending.automaticGenerationID != nil {
             let previousCount = lastRelatedCookieCountByHost[pending.host]
             automaticCookieRelatedCount = after.count
@@ -888,7 +1154,9 @@ final class BrowserViewModel: ObservableObject {
                          before: pending.beforeCount,
                          deleted: pending.deletedCount,
                          after: 0,
-                         result: result)
+                         result: result,
+                         automaticGenerationID: pending.automaticGenerationID,
+                         phase: "FAILED")
         showToast("Cookie再取得失敗", kind: .failure)
         pendingCookieRefresh = nil
         isCookieRefreshing = false
@@ -904,17 +1172,31 @@ final class BrowserViewModel: ObservableObject {
                                   before: Int,
                                   deleted: Int,
                                   after: Int,
-                                  result: String) {
-        logStore.append(action: "Cookie Refresh", fields: [
+                                  result: String,
+                                  automaticGenerationID: UInt64? = nil,
+                                  phase: String = "REFRESH") {
+        var fields = [
             ("URL", LogSanitizer.url(currentURL)),
             ("DOMAIN", host),
             ("UA", "\(selectedUAIndex + 1)/\(BrowserUserAgent.all.count) \(currentUserAgent.name)"),
             ("COOKIE_BEFORE", String(before)),
             ("COOKIE_DELETED", String(deleted)),
             ("COOKIE_AFTER_RELOAD", String(after)),
+            ("COOKIE_SAMPLE_PHASE", phase),
+            ("FLOW_MODE", automaticGenerationID == nil ? "MANUAL" : "AUTOMATIC"),
             ("POST_COOKIE", "UNVERIFIED"),
             ("RESULT", result)
-        ])
+        ]
+        if let automaticGenerationID,
+           let context = automaticLogContext(generationID: automaticGenerationID) {
+            fields.insert(contentsOf: automaticLogMetadata(
+                context,
+                phase: "COOKIE",
+                event: "REFRESH_\(phase)",
+                result: result
+            ), at: 0)
+        }
+        logStore.append(action: "Cookie Refresh", fields: fields)
     }
 
     private static func cellularReconnectURL() -> URL? {
@@ -968,11 +1250,35 @@ final class BrowserViewModel: ObservableObject {
             showToast("IP確認失敗", kind: .warning)
         }
 
-        logStore.append(action: "Cellular Reconnect", fields: [
+        let automaticGenerationID: UInt64?
+        let apPurpose: String
+        switch purpose {
+        case .manual:
+            automaticGenerationID = nil
+            apPurpose = "MANUAL"
+        case let .identityRefresh(generationID):
+            automaticGenerationID = generationID
+            apPurpose = "UA_REFRESH"
+        case let .automaticIPRetry(generationID):
+            automaticGenerationID = generationID
+            apPurpose = "AUTOMATIC_IP_RETRY"
+        }
+        var apFields = [
             ("IP_BEFORE", before ?? "UNAVAILABLE"),
             ("IP_AFTER", after ?? "UNAVAILABLE"),
+            ("AP_PURPOSE", apPurpose),
             ("RESULT", result)
-        ])
+        ]
+        if let automaticGenerationID,
+           let context = automaticLogContext(generationID: automaticGenerationID) {
+            apFields.insert(contentsOf: automaticLogMetadata(
+                context,
+                phase: "AP",
+                event: "RECONNECT_COMPLETED",
+                result: result
+            ), at: 0)
+        }
+        logStore.append(action: "Cellular Reconnect", fields: apFields)
         pendingAP = nil
         isAPRunning = false
 
@@ -1021,12 +1327,36 @@ final class BrowserViewModel: ObservableObject {
                                  reloadAfterCompletion: Bool,
                                  purpose: APPurpose) {
         showToast("IP確認失敗", kind: .warning)
-        logStore.append(action: "Cellular Reconnect", fields: [
+        let automaticGenerationID: UInt64?
+        let apPurpose: String
+        switch purpose {
+        case .manual:
+            automaticGenerationID = nil
+            apPurpose = "MANUAL"
+        case let .identityRefresh(generationID):
+            automaticGenerationID = generationID
+            apPurpose = "UA_REFRESH"
+        case let .automaticIPRetry(generationID):
+            automaticGenerationID = generationID
+            apPurpose = "AUTOMATIC_IP_RETRY"
+        }
+        var apFields = [
             ("IP_BEFORE", before ?? "UNAVAILABLE"),
             ("IP_AFTER", "UNAVAILABLE"),
             ("CALLBACK_STATUS", status),
+            ("AP_PURPOSE", apPurpose),
             ("RESULT", "FAILED")
-        ])
+        ]
+        if let automaticGenerationID,
+           let context = automaticLogContext(generationID: automaticGenerationID) {
+            apFields.insert(contentsOf: automaticLogMetadata(
+                context,
+                phase: "AP",
+                event: "RECONNECT_FAILED",
+                result: "FAILED"
+            ), at: 0)
+        }
+        logStore.append(action: "Cellular Reconnect", fields: apFields)
         pendingAP = nil
         isAPRunning = false
         switch purpose {
@@ -1058,17 +1388,41 @@ final class BrowserViewModel: ObservableObject {
         case .none:
             break
         case .scheduleInitialSubmit:
+            appendAutomaticEvent(
+                generationID: generationID,
+                phase: "PREPARATION",
+                event: "PREPARATION_READY",
+                result: "READY",
+                fields: [
+                    ("AP_RESULT", automaticAPResult),
+                    ("COOKIE_RELATED_COUNT", automaticCookieRelatedCount.map { String($0) } ?? "UNAVAILABLE"),
+                    ("COOKIE_COUNT_DELTA", automaticCookieCountDelta.map { String($0) } ?? "UNAVAILABLE")
+                ]
+            )
             setAutomaticPostStatus(.checkingCookie, generationID: generationID)
             scheduleInitialSubmit(generationID: generationID)
         case let .submit(attempt):
             submitAutomatically(attempt: attempt, generationID: generationID)
         case .startIPReconnect:
+            appendAutomaticEvent(
+                generationID: generationID,
+                phase: "AP",
+                event: "RECONNECT_REQUESTED",
+                result: "STARTED",
+                fields: [("AP_PURPOSE", "AUTOMATIC_IP_RETRY")]
+            )
             setAutomaticPostStatus(.reconnectingAfterIPLimit, generationID: generationID)
             startCellularReconnect(
                 reloadAfterCompletion: false,
                 purpose: .automaticIPRetry(generationID: generationID)
             )
         case .startNextAutomaticFlow:
+            appendAutomaticEvent(
+                generationID: generationID,
+                phase: "FLOW",
+                event: "ACCESS_RESTRICTED_HANDOFF",
+                result: "NEXT_UA_REQUESTED"
+            )
             setAutomaticPostStatus(.switchingAfterAccessRestriction,
                                    generationID: generationID)
             startNextAutomaticFlow(previousGenerationID: generationID)
@@ -1077,6 +1431,8 @@ final class BrowserViewModel: ObservableObject {
             finishAutomaticPost(generationID: generationID, result: "SUCCEEDED")
         case let .stopped(reason):
             setAutomaticPostStatus(.stopped, generationID: generationID)
+            automaticPostVerificationTask?.cancel()
+            automaticPostVerificationTask = nil
             finishAutomaticPost(generationID: generationID,
                                 result: "STOPPED_\(String(describing: reason).uppercased())")
         }
@@ -1131,26 +1487,76 @@ final class BrowserViewModel: ObservableObject {
         } else {
             branch = "COOKIE_RETRY"
         }
-        logStore.append(action: "Automatic Post", fields: [
+        var submitFields = [
             ("ATTEMPT", String(attempt)),
             ("BRANCH", branch),
             ("COOKIE_RELATED_COUNT", automaticCookieRelatedCount.map { String($0) } ?? "UNAVAILABLE"),
             ("COOKIE_COUNT_DELTA", automaticCookieCountDelta.map { String($0) } ?? "UNAVAILABLE"),
             ("AP_RESULT", automaticAPResult),
             ("RESULT", "SUBMIT_STARTED")
-        ])
+        ]
+        if let context = automaticLogContext(generationID: generationID) {
+            submitFields.insert(contentsOf: automaticLogMetadata(
+                context,
+                phase: "SUBMIT",
+                event: "CLICK_STARTED",
+                result: "STARTED"
+            ), at: 0)
+        }
+        logStore.append(action: "Automatic Post", fields: submitFields)
         webView.evaluateJavaScript(CompactPageModeService.autoSubmitScript) {
             [weak self] result, error in
-            guard let self,
-                  self.automaticPostMachine.generationID == generationID,
-                  self.automaticPostMachine.currentAttempt == attempt else { return }
+            guard let self else { return }
+            guard self.automaticPostMachine.generationID == generationID,
+                  self.automaticPostMachine.currentAttempt == attempt else {
+                if let currentGenerationID = self.automaticPostMachine.generationID {
+                    self.appendAutomaticEvent(
+                        generationID: currentGenerationID,
+                        phase: "SUBMIT",
+                        event: "CLICK_CALLBACK_IGNORED",
+                        result: "IGNORED",
+                        fields: [("REASON", "STALE_GENERATION_OR_ATTEMPT")]
+                    )
+                }
+                return
+            }
             if case .waitingForCookieRetry = self.automaticPostMachine.state {
+                self.appendAutomaticEvent(
+                    generationID: generationID,
+                    phase: "SUBMIT",
+                    event: "CLICK_CALLBACK_IGNORED",
+                    result: "IGNORED",
+                    fields: [("REASON", "COOKIE_RETRY_PENDING")]
+                )
                 return
             }
             if case .waitingForIPRetry = self.automaticPostMachine.state {
+                self.appendAutomaticEvent(
+                    generationID: generationID,
+                    phase: "SUBMIT",
+                    event: "CLICK_CALLBACK_IGNORED",
+                    result: "IGNORED",
+                    fields: [("REASON", "IP_RETRY_PENDING")]
+                )
                 return
             }
             let didClick = (result as? Bool) ?? false
+            var callbackFields = [
+                ("ATTEMPT", String(attempt)),
+                ("JS_RESULT", didClick && error == nil ? "CLICKED" : "FAILED")
+            ]
+            if let error {
+                let nsError = error as NSError
+                callbackFields.append(("ERROR_DOMAIN", nsError.domain))
+                callbackFields.append(("ERROR_CODE", String(nsError.code)))
+            }
+            self.appendAutomaticEvent(
+                generationID: generationID,
+                phase: "SUBMIT",
+                event: "CLICK_CALLBACK",
+                result: didClick && error == nil ? "ACCEPTED" : "FAILED",
+                fields: callbackFields
+            )
             guard error == nil, didClick else {
                 let effect = self.automaticPostMachine.handle(
                     .fail(generationID: generationID, reason: .communicationFailure)
@@ -1190,14 +1596,25 @@ final class BrowserViewModel: ObservableObject {
     private func finishAutomaticPost(generationID: UInt64, result: String) {
         guard automaticPostMachine.generationID == generationID else { return }
         automaticPostPreparationTimer?.cancel()
-        logStore.append(action: "Automatic Post", fields: [
+        var finalFields = [
             ("ATTEMPT", String(automaticPostMachine.lastAttempt)),
             ("BRANCH", "FINAL"),
             ("COOKIE_RELATED_COUNT", automaticCookieRelatedCount.map { String($0) } ?? "UNAVAILABLE"),
             ("COOKIE_COUNT_DELTA", automaticCookieCountDelta.map { String($0) } ?? "UNAVAILABLE"),
             ("AP_RESULT", automaticAPResult),
+            ("POST_ACCEPTANCE", automaticPostAccepted ? "CONFIRMED" : "UNOBSERVED"),
+            ("POST_VISIBILITY", automaticOwnResponseConfirmed ? "CONFIRMED" : "NOT_OBSERVED"),
             ("RESULT", result)
-        ])
+        ]
+        if let context = automaticLogContext(generationID: generationID) {
+            finalFields.insert(contentsOf: automaticLogMetadata(
+                context,
+                phase: "FINAL",
+                event: "FLOW_FINISHED",
+                result: result
+            ), at: 0)
+        }
+        logStore.append(action: "Automatic Post", fields: finalFields)
         automaticPostStatusTask?.cancel()
         automaticPostStatusTask = Task { @MainActor [weak self] in
             try? await Task.sleep(nanoseconds: 5_000_000_000)
@@ -1215,6 +1632,173 @@ final class BrowserViewModel: ObservableObject {
         guard automaticPostMachine.generationID == generationID else { return }
         automaticPostStatusTask?.cancel()
         automaticPostStatus = status
+    }
+
+    private func beginAutomaticGenerationLogging(generationID: UInt64) {
+        automaticGenerationStartedAt[generationID] = Date()
+        if automaticGenerationStartedAt.count > 16,
+           let oldestGenerationID = automaticGenerationStartedAt.keys.min() {
+            automaticGenerationStartedAt.removeValue(forKey: oldestGenerationID)
+        }
+        automaticPostAccepted = false
+        automaticOwnResponseConfirmed = false
+        automaticAcceptedPageToken = nil
+        automaticPostVerificationTask?.cancel()
+        automaticPostVerificationTask = nil
+    }
+
+    private func automaticLogContext(generationID: UInt64) -> AutomaticLogContext? {
+        guard let startedAt = automaticGenerationStartedAt[generationID] else {
+            return nil
+        }
+        automaticEventSequence &+= 1
+        let elapsed = max(0, Int((Date().timeIntervalSince(startedAt) * 1_000).rounded()))
+        return AutomaticLogContext(generationID: generationID,
+                                   sequence: automaticEventSequence,
+                                   elapsedMilliseconds: elapsed)
+    }
+
+    private func automaticLogMetadata(_ context: AutomaticLogContext,
+                                      phase: String,
+                                      event: String,
+                                      result: String? = nil) -> [(String, String)] {
+        var fields = [
+            ("GENERATION_ID", String(context.generationID)),
+            ("EVENT_SEQ", String(context.sequence)),
+            ("ELAPSED_MS", String(context.elapsedMilliseconds)),
+            ("PHASE", phase),
+            ("EVENT", event)
+        ]
+        if let result {
+            fields.append(("EVENT_RESULT", result))
+        }
+        return fields
+    }
+
+    private func appendAutomaticEvent(generationID: UInt64,
+                                      phase: String,
+                                      event: String,
+                                      result: String? = nil,
+                                      fields: [(String, String)] = []) {
+        guard let context = automaticLogContext(generationID: generationID) else {
+            return
+        }
+        var allFields = automaticLogMetadata(context,
+                                              phase: phase,
+                                              event: event,
+                                              result: result)
+        allFields.append(contentsOf: fields)
+        logStore.append(action: "Automatic Post Event", fields: allFields)
+    }
+
+    func recordAutomaticBridgeIgnored(type: String, reason: String) {
+        guard let generationID = automaticPostMachine.generationID else { return }
+        appendAutomaticEvent(
+            generationID: generationID,
+            phase: "BRIDGE",
+            event: "\(Self.safeBridgeEventName(type))_IGNORED",
+            result: "IGNORED",
+            fields: [("PAGE_TOKEN_STATE", reason)]
+        )
+    }
+
+    private func recordAutomaticPostAccepted(generationID: UInt64,
+                                             pageToken: String,
+                                             source: String) {
+        guard automaticPostMachine.generationID == generationID,
+              automaticPostMachine.pageToken == pageToken else {
+            recordAutomaticBridgeIgnored(type: "postCompleted",
+                                          reason: "STALE_OR_MISMATCH")
+            return
+        }
+        guard case .submitting = automaticPostMachine.state else {
+            return
+        }
+        if automaticPostAccepted {
+            appendAutomaticEvent(
+                generationID: generationID,
+                phase: "SUBMIT",
+                event: "POST_ACCEPTED_DUPLICATE",
+                result: "IGNORED",
+                fields: [
+                    ("PAGE_TOKEN_STATE", "MATCH"),
+                    ("SOURCE", Self.safePostAcceptanceSource(source))
+                ]
+            )
+            return
+        }
+        automaticPostAccepted = true
+        automaticAcceptedPageToken = pageToken
+        appendAutomaticEvent(
+            generationID: generationID,
+            phase: "SUBMIT",
+            event: "POST_ACCEPTED",
+            result: "MARKER_COMPLETED",
+            fields: [
+                ("PAGE_TOKEN_STATE", "MATCH"),
+                ("SOURCE", Self.safePostAcceptanceSource(source)),
+                ("POST_VISIBILITY", automaticOwnResponseConfirmed ? "CONFIRMED" : "PENDING")
+            ]
+        )
+        if automaticOwnResponseConfirmed {
+            automaticPostVerificationTask = nil
+        } else {
+            scheduleAutomaticPostVerificationTimeout(generationID: generationID)
+        }
+    }
+
+    private func scheduleAutomaticPostVerificationTimeout(generationID: UInt64) {
+        automaticPostVerificationTask?.cancel()
+        automaticPostVerificationTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 12_000_000_000)
+            guard let self,
+                  !Task.isCancelled,
+                  self.automaticPostMachine.generationID == generationID,
+                  self.automaticPostAccepted,
+                  !self.automaticOwnResponseConfirmed else { return }
+            self.appendAutomaticEvent(
+                generationID: generationID,
+                phase: "VERIFICATION",
+                event: "OWN_RESPONSE_TIMEOUT",
+                result: "NOT_CONFIRMED",
+                fields: [
+                    ("PAGE_TOKEN_STATE", self.automaticAcceptedPageToken == nil ?
+                        "MISSING" : "ACCEPTED_PAGE"),
+                    ("FINAL_RESULT", "ACCEPTED_UNCONFIRMED")
+                ]
+            )
+            self.automaticPostVerificationTask = nil
+        }
+    }
+
+    private static func safeBridgeEventName(_ type: String) -> String {
+        switch type {
+        case "compactReady": return "COMPACT_READY"
+        case "handwritingReady": return "HANDWRITING_READY"
+        case "postStatus": return "POST_STATUS"
+        case "postCompleted": return "POST_COMPLETED"
+        case "ownPostVisible": return "OWN_POST_VISIBLE"
+        case "ownPostObservation": return "OWN_POST_OBSERVATION"
+        default: return "OTHER_BRIDGE_EVENT"
+        }
+    }
+
+    private static func safePostAcceptanceSource(_ source: String) -> String {
+        switch source {
+        case "POST_STATUS": return "POST_STATUS"
+        case "POST_COMPLETED": return "POST_COMPLETED"
+        default: return "OTHER"
+        }
+    }
+
+    private static func safeMatchMethod(_ method: String?) -> String {
+        switch method {
+        case "COMMENT_NORMALIZED": return "COMMENT_NORMALIZED"
+        case "COMMENT_COMPACT": return "COMMENT_COMPACT"
+        case "IMAGE_ATTACHMENT": return "IMAGE_ATTACHMENT"
+        case "DEFAULT_IMAGE_COMMENT": return "DEFAULT_IMAGE_COMMENT"
+        default: return "NONE"
+        }
     }
 
     private static func postState(from result: Any?) -> (hasComment: Bool,

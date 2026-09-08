@@ -17,4 +17,11 @@ final class DebugLogEntryTests: XCTestCase {
         XCTAssertFalse(safe.contains("token=abc"))
         XCTAssertTrue(safe.contains("normal=ok"))
     }
+
+    func testPlainTextKeepsMillisecondResolutionForAsyncOrdering() {
+        let date = Date(timeIntervalSince1970: 1_000_000.123)
+        let entry = DebugLogEntry(date: date, action: "Test", fields: [])
+        XCTAssertTrue(entry.plainText.range(of: #"\d{2}:\d{2}:\d{2}\.\d{3}"#,
+                                            options: .regularExpression) != nil)
+    }
 }

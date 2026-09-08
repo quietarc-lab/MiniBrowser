@@ -22,7 +22,7 @@ struct DebugLogEntry: Codable, Identifiable, Equatable {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.timeZone = .current
-        formatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
+        formatter.dateFormat = "yyyy-MM-dd HH:mm:ss.SSS"
 
         var lines = [formatter.string(from: date), "ACTION: \(action)"]
         lines.append(contentsOf: fields.map { "\($0.key): \($0.value)" })
@@ -61,4 +61,3 @@ enum LogSanitizer {
         return components.string ?? text(url.absoluteString)
     }
 }
-

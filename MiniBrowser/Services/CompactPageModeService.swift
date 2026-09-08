@@ -585,6 +585,8 @@ enum CompactPageModeService {
         "ｷﾀ━━━━━━(ﾟ∀ﾟ)━━━━━━ !!!!!",
         "本文無し"
       ]);
+      let lastOwnPostObservationKey = null;
+      let lastOwnPostObservationAt = 0;
 
       function normalizedText(value) {
         return String(value || "")
@@ -670,11 +672,36 @@ enum CompactPageModeService {
 
       let state = loadState();
 
+      function notifyOwnPostObservation(pendingCount, responseCount,
+                                         newResponseCount, matchedCount,
+                                         matchMethod) {
+        if (!nativeMessageHandler || pendingCount <= 0) return;
+        const method = String(matchMethod || "");
+        const key = [pendingCount, responseCount, newResponseCount,
+          matchedCount, method].join(":");
+        const now = Date.now();
+        if (key === lastOwnPostObservationKey &&
+            now - lastOwnPostObservationAt < 1000) return;
+        lastOwnPostObservationKey = key;
+        lastOwnPostObservationAt = now;
+        sendNative({
+          type: "ownPostObservation",
+          pendingCount,
+          responseCount,
+          newResponseCount,
+          matchedCount,
+          matchMethod: method
+        });
+      }
+
       function reconcileAndRender() {
         const infos = responseInfos();
         const own = new Set(state.ownNumbers.map(String));
         const now = Date.now();
         const remaining = [];
+        const pendingBefore = state.pending.slice();
+        let matchedCount = 0;
+        let firstMatchMethod = "";
 
         state.pending.forEach(pending => {
           if (!pending || now - Number(pending.createdAt || 0) > 10 * 60 * 1000) return;
@@ -695,10 +722,28 @@ enum CompactPageModeService {
           const match = candidates.sort((a, b) => a.numericNumber - b.numericNumber).pop();
           if (match) {
             own.add(match.number);
+            matchedCount += 1;
+            if (!firstMatchMethod) {
+              if (body) {
+                firstMatchMethod = match.bodyKey === body ?
+                  "COMMENT_NORMALIZED" : "COMMENT_COMPACT";
+              } else if (hasAttachment && match.hasImage) {
+                firstMatchMethod = "IMAGE_ATTACHMENT";
+              } else {
+                firstMatchMethod = "DEFAULT_IMAGE_COMMENT";
+              }
+            }
           } else {
             remaining.push(pending);
           }
         });
+
+        const highestPendingAfterNumber = pendingBefore.reduce((maximum, pending) =>
+          Math.max(maximum, Number(pending && pending.afterNumber || 0)), 0
+        );
+        const newResponseCount = infos.filter(info =>
+          info.numericNumber > highestPendingAfterNumber
+        ).length;
 
         state.ownNumbers = Array.from(own);
         state.pending = remaining;
@@ -709,6 +754,19 @@ enum CompactPageModeService {
         infos.forEach(info => {
           info.table.classList.toggle("minibrowser-own-response", own.has(info.number));
         });
+
+        if (matchedCount > 0) {
+          sendNative({
+            type: "ownPostVisible",
+            matchedCount,
+            pendingCount: remaining.length,
+            responseCount: infos.length,
+            newResponseCount,
+            matchMethod: firstMatchMethod
+          });
+        }
+        notifyOwnPostObservation(remaining.length, infos.length,
+                                newResponseCount, matchedCount, firstMatchMethod);
       }
 
       if (!form.dataset.minibrowserOwnPostTracking) {
@@ -733,6 +791,7 @@ enum CompactPageModeService {
           });
           state.pending = state.pending.slice(-10);
           saveState(state);
+          reconcileAndRender();
         };
         form.addEventListener("submit", recordPendingPost, true);
         form.addEventListener("click", event => {

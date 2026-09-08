@@ -55,6 +55,7 @@ Windows cannot compile this iOS target. The authoritative compile/test check is 
 - Browser-family UA tokens are representative hardcoded profiles. iOS 26 freezes the OS portion at the final iOS 18 value for compatibility; changing a UA does not change the underlying WebKit engine.
 - Access-restricted UA IDs are persisted locally for seven days and skipped by automatic rotation. UA rotation diversifies the presented profile but does not by itself anonymize the IP, Cookie, or WebKit fingerprint.
 - Automatic bookmarklets run only when the configured domain exactly matches the current host. Their stored source is unchanged; execution forces a bridgeable Boolean completion value.
+- Automatic-post diagnostics include generation/event ordering, elapsed time, branch/AP/Cookie outcomes, JavaScript callback results, and a separate own-response DOM confirmation or timeout. Comment text, Cookie values, image data, alert text, and raw page tokens are not recorded.
 - TargetPage focus mode runs only on `configured target host/*/res/*.htm`. The opener image and four-line text summary sit beside the form; page headers, reload/footer controls, and other users' replies are hidden. Pending reply text stays in per-tab session storage until matched or expired; persistent history contains response numbers only.
 - Input-focus zoom prevention raises only editable controls rendered below 16 px to 16 px. It does not restrict the viewport scale or disable the WKWebView pinch gesture.
 
