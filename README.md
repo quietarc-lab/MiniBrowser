@@ -13,14 +13,14 @@ MiniBrowser is a lightweight iPhone browser built with SwiftUI and `WKWebView`. 
 ## MVP features
 
 - URL-only navigation, current URL tracking, last URL restoration, back/forward/reload, and a 30-second timeout
-- Ten persistent iOS/iPadOS-style User-Agent profiles; a user-initiated UA change refreshes only the current host's related cookies, launches the AP shortcut, returns automatically, then reloads for cookie verification
+- Fifty persistent iOS/iPadOS-style User-Agent profiles; a user-initiated UA change refreshes only the current host's related cookies, launches the AP shortcut, returns automatically, then reloads for cookie verification
 - Current-host and parent-domain Cookie deletion followed by reload and verified reacquisition
 - `セルラー再接続` through Apple's Shortcuts x-callback URL, automatic return, and public IPv4 comparison without reloading the page when started manually
 - Local bookmarks and unlimited-length multiline bookmarklets with edit/delete/drag reorder and exact-domain automatic execution
 - Conservative always-on `WKContentRuleList` ad/tracker blocking
 - A focused `configured target host` thread layout that keeps the reply form, a four-line opener summary with its image, and locally tracked own replies while hiding surrounding site chrome
 - While MiniBrowser remains launched, an image selected through the existing TargetPage handwriting bookmarklet is held only in memory and redrawn after a supported thread reload/navigation with one random pixel added; it is never written to browser storage or logs
-- A UA-button-only TargetPage automatic post flow waits for AP, reload, Cookie, compact-form, and handwriting readiness, then allows one Cookie retry or one terminal AP/IP retry (three attempts maximum)
+- A UA-button-only TargetPage automatic post flow waits for AP, reload, Cookie, compact-form, and handwriting readiness, skips UA profiles quarantined for seven days after an access restriction, starts the next eligible generation, and permits one terminal continuous-post retry (four attempts maximum per generation)
 - A collapsible native two-column official TargetPage list with momentum/list/reply-count sorting, up to 60 active threads, thumbnail retry on refresh, reply counts, and high-contrast visited state
 - Input-focus auto zoom prevention for small form fields while preserving manual pinch zoom
 - A 500-entry redacted debug log; long-press the bottom toolbar and choose `ログをコピー` to copy the latest 50 entries
@@ -53,6 +53,7 @@ Windows cannot compile this iOS target. The authoritative compile/test check is 
 - AP callback uses `shortcuts://x-callback-url/run-shortcut` with success/cancel/error callbacks to `minibrowser://return`. A manually started AP reconnect never reloads the page; the UA-change privacy flow intentionally reloads only after the callback so it can reacquire the current host's cookies.
 - Public IPv4 comes from the replaceable `IPAddressService` endpoint (`https://api.ipify.org?format=json`) with an 8-second request timeout.
 - Browser-family UA tokens are representative hardcoded profiles. iOS 26 freezes the OS portion at the final iOS 18 value for compatibility; changing a UA does not change the underlying WebKit engine.
+- Access-restricted UA IDs are persisted locally for seven days and skipped by automatic rotation. UA rotation diversifies the presented profile but does not by itself anonymize the IP, Cookie, or WebKit fingerprint.
 - Automatic bookmarklets run only when the configured domain exactly matches the current host. Their stored source is unchanged; execution forces a bridgeable Boolean completion value.
 - TargetPage focus mode runs only on `configured target host/*/res/*.htm`. The opener image and four-line text summary sit beside the form; page headers, reload/footer controls, and other users' replies are hidden. Pending reply text stays in per-tab session storage until matched or expired; persistent history contains response numbers only.
 - Input-focus zoom prevention raises only editable controls rendered below 16 px to 16 px. It does not restrict the viewport scale or disable the WKWebView pinch gesture.

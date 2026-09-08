@@ -30,6 +30,7 @@ $contentViewFile = Join-Path $projectRoot 'MiniBrowser\Views\ContentView.swift'
 $sitePostStatusViewFile = Join-Path $projectRoot 'MiniBrowser\Views\SitePostStatusView.swift'
 $dialogPolicyFile = Join-Path $projectRoot 'MiniBrowser\Support\WebDialogPolicy.swift'
 $automaticFlowFile = Join-Path $projectRoot 'MiniBrowser\Support\AutomaticPostFlow.swift'
+$uaRestrictionFile = Join-Path $projectRoot 'MiniBrowser\Support\UserAgentRestrictionStore.swift'
 $sitePostStatusFile = Join-Path $projectRoot 'MiniBrowser\Models\SitePostStatus.swift'
 $inputZoomFile = Join-Path $projectRoot 'MiniBrowser\Services\InputAutoZoomPreventionService.swift'
 $focusModeFile = Join-Path $projectRoot 'MiniBrowser\Services\CompactPageModeService.swift'
@@ -104,12 +105,18 @@ Assert-Contains $contentViewFile 'SitePostStatusView' 'fixed site post status ov
 Assert-Contains $sitePostStatusViewFile 'frame\(width: 240, height: 28\)' 'fixed site post status dimensions'
 Assert-Contains $sitePostStatusFile 'UA準備中' 'automatic UA preparation status'
 Assert-Contains $sitePostStatusFile '自動投稿停止' 'automatic stop status'
-Assert-Contains $automaticFlowFile 'maximumAttempts = 3' 'automatic post attempt limit'
+Assert-Contains $automaticFlowFile 'maximumAttempts = 4' 'automatic post attempt limit'
+Assert-Contains $automaticFlowFile 'startNextAutomaticFlow' 'automatic access-restriction handoff'
+Assert-Contains $automaticFlowFile 'continuousRetryUsed' 'continuous-post retry guard'
 Assert-Contains $automaticFlowFile 'generationID' 'automatic post generation guard'
 Assert-Contains $automaticFlowFile 'stalePageToken' 'automatic post page token guard'
 Assert-Contains $dialogPolicyFile 'return false' 'site alerts are not auto-dismissed'
 Assert-Contains $dialogPolicyFile 'TargetPageAlertClassifier' 'known target-page alert classification'
+Assert-Contains $dialogPolicyFile 'アクセス規制中です' 'access restriction alert classification'
+Assert-Contains $dialogPolicyFile '連続投稿はもうしばらく時間を置いてからお願い致します' 'continuous-post alert classification'
 Assert-Contains $viewModelFile 'recordTargetPageAlert' 'target-page alert observation'
+Assert-Contains $viewModelFile 'nextEligibleUserAgentIndex' 'restricted-UA rotation'
+Assert-Contains $uaRestrictionFile '7 \* 24 \* 60 \* 60' 'seven-day UA restriction duration'
 Assert-Contains $viewModelFile 'RELOADED_POST_COOKIE_UNVERIFIED' 'cookie reload is not treated as posting-cookie proof'
 Assert-Contains $handwritingServiceFile 'context\.fillRect\(x, y, 1, 1\)' 'single-pixel handwriting image variation'
 Assert-Contains $handwritingServiceFile 'maximumImageDataByteCount = 3_000_000' 'bounded in-memory handwriting image size'
@@ -142,12 +149,12 @@ if ($LASTEXITCODE -ne 0) {
 
 $uaText = Get-Content -LiteralPath $uaFile -Raw -Encoding UTF8
 $uaCount = ([regex]::Matches($uaText, '\.init\(id:\s*\d+')).Count
-if ($uaCount -ne 10) {
-    throw "Expected exactly 10 user agents, found $uaCount."
+if ($uaCount -ne 50) {
+    throw "Expected exactly 50 user agents, found $uaCount."
 }
 $uaValues = [regex]::Matches($uaText, 'value:\s*"([^"]+)"') | ForEach-Object { $_.Groups[1].Value }
-if (($uaValues | Select-Object -Unique).Count -ne 10) {
-    throw 'Expected 10 distinct user-agent strings.'
+if (($uaValues | Select-Object -Unique).Count -ne 50) {
+    throw 'Expected 50 distinct user-agent strings.'
 }
 if ($uaValues -match 'CPU (iPhone )?OS 26_') {
     throw 'iOS 26 UA profiles must use the frozen iOS 18 OS token.'
@@ -218,7 +225,7 @@ if ($PublicMetadata) {
 
 Write-Host 'Static checks passed.'
 Write-Host "User agents: $uaCount"
-Write-Host 'Distinct user-agent strings: 10'
+Write-Host 'Distinct user-agent strings: 50'
 Write-Host 'Cookie value access: none'
 Write-Host 'Deployment target: iOS 26.0'
 if ($PublicMetadata) {

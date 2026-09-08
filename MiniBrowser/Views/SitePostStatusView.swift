@@ -29,7 +29,8 @@ struct SitePostStatusView: View {
             case .completed: return .green
             case .stopped: return .red
             case .preparingUA, .checkingCookie, .sending, .cookieRetry,
-                 .reconnectingAfterIPLimit, .finalSendAfterIPChange:
+                 .reconnectingAfterIPLimit, .finalSendAfterIPChange,
+                 .switchingAfterAccessRestriction:
                 return .blue
             }
         }

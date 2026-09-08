@@ -70,6 +70,47 @@ final class AutomaticPostFlowTests: XCTestCase {
                        .submit(attempt: 3))
     }
 
+    func testAccessRestrictionStopsCurrentGenerationAndRequestsNextFlow() {
+        var machine = readyMachine(hasComment: true, hasImage: false)
+        let result = machine.handleAlert(.accessRestricted, generationID: generation)
+        XCTAssertTrue(result.autoDismiss)
+        XCTAssertEqual(result.effect, .startNextAutomaticFlow)
+        XCTAssertEqual(machine.state,
+                       .stopped(generationID: generation, reason: .accessRestricted))
+    }
+
+    func testContinuousPostingGetsOneAdditionalDirectSubmit() {
+        var machine = readyMachine(hasComment: true, hasImage: false)
+        _ = machine.handleAlert(.cookieRetryRequired, generationID: generation)
+        _ = machine.handle(.cookieAlertDismissed(generationID: generation))
+        _ = machine.handleAlert(.imagePostingRestricted, generationID: generation)
+        _ = machine.handle(.ipReconnectCompleted(generationID: generation, success: true))
+        XCTAssertEqual(machine.handle(.ipSubmitDelayElapsed(generationID: generation)),
+                       .submit(attempt: 3))
+
+        let alertResult = machine.handleAlert(.continuousPosting, generationID: generation)
+        XCTAssertTrue(alertResult.autoDismiss)
+        XCTAssertEqual(machine.state,
+                       .waitingForContinuousRetry(generationID: generation, attempt: 3))
+        XCTAssertEqual(machine.handle(.continuousAlertDismissed(generationID: generation)),
+                       .submit(attempt: 4))
+        XCTAssertEqual(machine.state,
+                       .submitting(generationID: generation, attempt: 4))
+    }
+
+    func testContinuousPostingSecondAlertStopsWithoutFifthSubmit() {
+        var machine = readyMachine(hasComment: true, hasImage: false)
+        let first = machine.handleAlert(.continuousPosting, generationID: generation)
+        XCTAssertTrue(first.autoDismiss)
+        XCTAssertEqual(machine.handle(.continuousAlertDismissed(generationID: generation)),
+                       .submit(attempt: 2))
+        XCTAssertEqual(machine.handleAlert(.continuousPosting, generationID: generation).effect,
+                       .stopped(.knownAlertAfterLimit))
+        XCTAssertEqual(machine.state,
+                       .stopped(generationID: generation, reason: .knownAlertAfterLimit))
+        XCTAssertEqual(machine.handle(.continuousAlertDismissed(generationID: generation)), .none)
+    }
+
     func testCompletionAndFailuresStopFurtherEvents() {
         var machine = readyMachine(hasComment: true, hasImage: false)
         XCTAssertEqual(machine.handle(.postCompleted(generationID: generation)), .succeeded)

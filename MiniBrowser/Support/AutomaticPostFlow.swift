@@ -3,6 +3,8 @@ import Foundation
 enum AutomaticPostAlert: Equatable {
     case cookieRetryRequired
     case imagePostingRestricted
+    case accessRestricted
+    case continuousPosting
 }
 
 enum TargetPageAlertDisposition: Equatable {
@@ -12,6 +14,8 @@ enum TargetPageAlertDisposition: Equatable {
 
 enum AutomaticPostStopReason: Equatable {
     case noContent
+    case noAvailableUserAgent
+    case accessRestricted
     case preparationTimeout
     case preparationFailed
     case communicationFailure
@@ -27,6 +31,7 @@ enum AutomaticPostFlowState: Equatable {
     case submitting(generationID: UInt64, attempt: Int)
     case waitingForCookieRetry(generationID: UInt64, attempt: Int)
     case waitingForIPRetry(generationID: UInt64, attempt: Int)
+    case waitingForContinuousRetry(generationID: UInt64, attempt: Int)
     case succeeded(generationID: UInt64)
     case stopped(generationID: UInt64, reason: AutomaticPostStopReason)
 }
@@ -36,6 +41,7 @@ enum AutomaticPostFlowEffect: Equatable {
     case scheduleInitialSubmit
     case submit(attempt: Int)
     case startIPReconnect
+    case startNextAutomaticFlow
     case succeeded
     case stopped(AutomaticPostStopReason)
 }
@@ -53,6 +59,7 @@ enum AutomaticPostFlowEvent: Equatable {
                               ready: Bool)
     case initialSubmitDelayElapsed(generationID: UInt64)
     case cookieAlertDismissed(generationID: UInt64)
+    case continuousAlertDismissed(generationID: UInt64)
     case ipReconnectCompleted(generationID: UInt64, success: Bool)
     case ipSubmitDelayElapsed(generationID: UInt64)
     case postCompleted(generationID: UInt64)
@@ -61,7 +68,8 @@ enum AutomaticPostFlowEvent: Equatable {
 }
 
 struct AutomaticPostFlowMachine {
-    static let maximumAttempts = 3
+    static let regularAttemptLimit = 3
+    static let maximumAttempts = 4
 
     private(set) var state: AutomaticPostFlowState = .idle
     private(set) var generationID: UInt64?
@@ -69,6 +77,7 @@ struct AutomaticPostFlowMachine {
     private(set) var cookieRetryUsed = false
     private(set) var ipRetryUsed = false
     private(set) var ipRetryIsTerminal = false
+    private(set) var continuousRetryUsed = false
     private(set) var requiresHandwriting = false
     private(set) var lastAttempt = 0
 
@@ -83,7 +92,8 @@ struct AutomaticPostFlowMachine {
     var isActive: Bool {
         switch state {
         case .preparing, .waitingToSubmit, .submitting,
-             .waitingForCookieRetry, .waitingForIPRetry:
+             .waitingForCookieRetry, .waitingForIPRetry,
+             .waitingForContinuousRetry:
             return true
         case .idle, .succeeded, .stopped:
             return false
@@ -95,7 +105,8 @@ struct AutomaticPostFlowMachine {
         case let .waitingToSubmit(_, attempt),
              let .submitting(_, attempt),
              let .waitingForCookieRetry(_, attempt),
-             let .waitingForIPRetry(_, attempt):
+             let .waitingForIPRetry(_, attempt),
+             let .waitingForContinuousRetry(_, attempt):
             return attempt
         case .idle, .preparing, .succeeded, .stopped:
             return nil
@@ -125,6 +136,7 @@ struct AutomaticPostFlowMachine {
         cookieRetryUsed = false
         ipRetryUsed = false
         ipRetryIsTerminal = false
+        continuousRetryUsed = false
         lastAttempt = 0
         apCompleted = false
         reloadCompleted = false
@@ -198,6 +210,13 @@ struct AutomaticPostFlowMachine {
 
         case .cookieAlertDismissed:
             guard case let .waitingForCookieRetry(_, attempt) = state,
+                  attempt < Self.regularAttemptLimit else {
+                return .none
+            }
+            return beginSubmit(attempt: attempt + 1)
+
+        case .continuousAlertDismissed:
+            guard case let .waitingForContinuousRetry(_, attempt) = state,
                   attempt < Self.maximumAttempts else {
                 return .none
             }
@@ -214,7 +233,7 @@ struct AutomaticPostFlowMachine {
         case .ipSubmitDelayElapsed:
             guard case let .waitingForIPRetry(_, attempt) = state,
                   ipReconnectCompleted,
-                  attempt < Self.maximumAttempts else {
+                  attempt < Self.regularAttemptLimit else {
                 return .none
             }
             return beginSubmit(attempt: attempt + 1)
@@ -238,10 +257,25 @@ struct AutomaticPostFlowMachine {
         }
 
         switch alert {
+        case .accessRestricted:
+            state = .stopped(generationID: generationID, reason: .accessRestricted)
+            return (true, .startNextAutomaticFlow)
+
+        case .continuousPosting:
+            guard !continuousRetryUsed,
+                  attempt < Self.maximumAttempts else {
+                return (true, stop(.knownAlertAfterLimit))
+            }
+            continuousRetryUsed = true
+            state = .waitingForContinuousRetry(generationID: generationID,
+                                                attempt: attempt)
+            return (true, .none)
+
         case .cookieRetryRequired:
             guard !cookieRetryUsed,
                   !ipRetryIsTerminal,
-                  attempt < Self.maximumAttempts else {
+                  !continuousRetryUsed,
+                  attempt < Self.regularAttemptLimit else {
                 return (true, stop(.knownAlertAfterLimit))
             }
             cookieRetryUsed = true
@@ -250,7 +284,8 @@ struct AutomaticPostFlowMachine {
 
         case .imagePostingRestricted:
             guard !ipRetryUsed,
-                  attempt < Self.maximumAttempts else {
+                  !continuousRetryUsed,
+                  attempt < Self.regularAttemptLimit else {
                 return (true, stop(.knownAlertAfterLimit))
             }
             ipRetryUsed = true
@@ -275,6 +310,7 @@ struct AutomaticPostFlowMachine {
         cookieRetryUsed = false
         ipRetryUsed = false
         ipRetryIsTerminal = false
+        continuousRetryUsed = false
         requiresHandwriting = false
         lastAttempt = 0
         apCompleted = false
@@ -332,6 +368,7 @@ private extension AutomaticPostFlowEvent {
              let .markCookieObserved(id),
              let .initialSubmitDelayElapsed(id),
              let .cookieAlertDismissed(id),
+             let .continuousAlertDismissed(id),
              let .ipSubmitDelayElapsed(id),
              let .postCompleted(id),
              let .fail(id, _):

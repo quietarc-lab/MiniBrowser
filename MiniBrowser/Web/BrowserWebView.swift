@@ -203,11 +203,17 @@ struct BrowserWebView: UIViewRepresentable {
                      runJavaScriptAlertPanelWithMessage message: String,
                      initiatedByFrame frame: WKFrameInfo,
                      completionHandler: @escaping () -> Void) {
+            var didComplete = false
+            let completeOnce = {
+                guard !didComplete else { return }
+                didComplete = true
+                completionHandler()
+            }
             let host = frame.request.url?.host ?? webView.url?.host
             if let category = TargetPageAlertClassifier.category(host: host, message: message),
                let host {
                 if model.handleTargetPageAlert(category, host: host) == .autoDismiss {
-                    completionHandler()
+                    completeOnce()
                     return
                 }
             } else {
@@ -217,26 +223,32 @@ struct BrowserWebView: UIViewRepresentable {
                                           message: message,
                                           preferredStyle: .alert)
             alert.addAction(UIAlertAction(title: "OK", style: .default) { _ in
-                completionHandler()
+                completeOnce()
             })
-            present(alert, from: webView, orCompleteWith: completionHandler)
+            present(alert, from: webView, orCompleteWith: completeOnce)
         }
 
         func webView(_ webView: WKWebView,
                      runJavaScriptConfirmPanelWithMessage message: String,
                      initiatedByFrame frame: WKFrameInfo,
                      completionHandler: @escaping (Bool) -> Void) {
+            var didComplete = false
+            let completeOnce: (Bool) -> Void = { value in
+                guard !didComplete else { return }
+                didComplete = true
+                completionHandler(value)
+            }
             let alert = UIAlertController(title: dialogTitle(for: frame, webView: webView),
                                           message: message,
                                           preferredStyle: .alert)
             alert.addAction(UIAlertAction(title: "キャンセル", style: .cancel) { _ in
-                completionHandler(false)
+                completeOnce(false)
             })
             alert.addAction(UIAlertAction(title: "OK", style: .default) { _ in
-                completionHandler(true)
+                completeOnce(true)
             })
             present(alert, from: webView) {
-                completionHandler(false)
+                completeOnce(false)
             }
         }
 
@@ -245,6 +257,12 @@ struct BrowserWebView: UIViewRepresentable {
                      defaultText: String?,
                      initiatedByFrame frame: WKFrameInfo,
                      completionHandler: @escaping (String?) -> Void) {
+            var didComplete = false
+            let completeOnce: (String?) -> Void = { value in
+                guard !didComplete else { return }
+                didComplete = true
+                completionHandler(value)
+            }
             let alert = UIAlertController(title: dialogTitle(for: frame, webView: webView),
                                           message: prompt,
                                           preferredStyle: .alert)
@@ -252,13 +270,13 @@ struct BrowserWebView: UIViewRepresentable {
                 textField.text = defaultText
             }
             alert.addAction(UIAlertAction(title: "キャンセル", style: .cancel) { _ in
-                completionHandler(nil)
+                completeOnce(nil)
             })
             alert.addAction(UIAlertAction(title: "OK", style: .default) { [weak alert] _ in
-                completionHandler(alert?.textFields?.first?.text)
+                completeOnce(alert?.textFields?.first?.text)
             })
             present(alert, from: webView) {
-                completionHandler(nil)
+                completeOnce(nil)
             }
         }
 

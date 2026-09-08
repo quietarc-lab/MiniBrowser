@@ -18,11 +18,14 @@ final class SitePostStatusTests: XCTestCase {
                        "IP制限 → AP再接続中")
         XCTAssertEqual(AutomaticPostStatus.finalSendAfterIPChange.rawValue,
                        "IP変更後に最終送信")
+        XCTAssertEqual(AutomaticPostStatus.switchingAfterAccessRestriction.rawValue,
+                       "アクセス規制 → 次のUAへ")
         XCTAssertEqual(AutomaticPostStatus.completed.rawValue, "完了")
         XCTAssertEqual(AutomaticPostStatus.stopped.rawValue, "自動投稿停止")
         XCTAssertTrue(AutomaticPostStatus.completed.isFinal)
         XCTAssertTrue(AutomaticPostStatus.stopped.isFinal)
         XCTAssertFalse(AutomaticPostStatus.sending.isFinal)
+        XCTAssertFalse(AutomaticPostStatus.switchingAfterAccessRestriction.isFinal)
     }
 
     func testOverlayDimensionsStayFixed() {

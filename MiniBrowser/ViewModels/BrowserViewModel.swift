@@ -8,6 +8,7 @@ final class BrowserViewModel: ObservableObject {
     private enum Keys {
         static let lastURL = "lastURL"
         static let userAgentIndex = "userAgentIndex"
+        static let userAgentID = "userAgentID"
     }
 
     @Published var urlText = ""
@@ -29,7 +30,10 @@ final class BrowserViewModel: ObservableObject {
     private let defaults: UserDefaults
     private let logStore: DebugLogStore
     private let ipService: IPAddressService
+    private let userAgentRestrictionStore: UserAgentRestrictionStore
     private var selectedUAIndex: Int
+    private var automaticTriedUAIDs: Set<Int> = []
+    private var automaticPostDraft: AutomaticPostDraft?
     private var pendingCookieRefresh: PendingCookieRefresh?
     private var pendingAP: PendingAP?
     private var lastRelatedCookieCountByHost: [String: Int] = [:]
@@ -44,6 +48,11 @@ final class BrowserViewModel: ObservableObject {
     private var automaticCookieRelatedCount: Int?
     private var automaticCookieCountDelta: Int?
     private var automaticAPResult = "NOT_REQUESTED"
+
+    private struct AutomaticPostDraft {
+        let hasComment: Bool
+        let hasImage: Bool
+    }
 
     private struct PendingCookieRefresh {
         let host: String
@@ -72,8 +81,14 @@ final class BrowserViewModel: ObservableObject {
         self.logStore = DebugLogStore(defaults: defaults)
         self.bookmarkStore = BookmarkStore(defaults: defaults)
         self.ipService = ipService
-        let savedIndex = defaults.integer(forKey: Keys.userAgentIndex)
-        self.selectedUAIndex = BrowserUserAgent.all.indices.contains(savedIndex) ? savedIndex : 0
+        self.userAgentRestrictionStore = UserAgentRestrictionStore(defaults: defaults)
+        if let savedID = defaults.object(forKey: Keys.userAgentID) as? Int,
+           let savedIndex = BrowserUserAgent.all.firstIndex(where: { $0.id == savedID }) {
+            self.selectedUAIndex = savedIndex
+        } else {
+            let savedIndex = defaults.integer(forKey: Keys.userAgentIndex)
+            self.selectedUAIndex = BrowserUserAgent.all.indices.contains(savedIndex) ? savedIndex : 0
+        }
     }
 
     var currentUserAgent: BrowserUserAgent {
@@ -166,9 +181,63 @@ final class BrowserViewModel: ObservableObject {
                 hasComment: hasComment,
                 hasImage: imageAvailable,
                 automatic: shouldStartAutomatic,
-                readError: error != nil
+                readError: error != nil,
+                targetUAIndex: nil,
+                excludedUAIDs: [],
+                newAutomaticSession: true
             )
         }
+    }
+
+    private func nextEligibleUserAgentIndex(after index: Int,
+                                            excluding excludedUAIDs: Set<Int>) -> Int? {
+        let restrictedUAIDs = userAgentRestrictionStore.restrictedIDs()
+        guard !BrowserUserAgent.all.isEmpty else { return nil }
+        for offset in 1...BrowserUserAgent.all.count {
+            let candidateIndex = (index + offset) % BrowserUserAgent.all.count
+            let candidateID = BrowserUserAgent.all[candidateIndex].id
+            guard !excludedUAIDs.contains(candidateID),
+                  !restrictedUAIDs.contains(candidateID) else {
+                continue
+            }
+            return candidateIndex
+        }
+        return nil
+    }
+
+    private func startNextAutomaticFlow(previousGenerationID: UInt64) {
+        guard automaticPostMachine.generationID == previousGenerationID,
+              let draft = automaticPostDraft,
+              let webView,
+              let pageURL = webView.url,
+              Self.isTargetThreadURL(pageURL),
+              let nextIndex = nextEligibleUserAgentIndex(
+                after: selectedUAIndex,
+                excluding: automaticTriedUAIDs
+              ) else {
+            setAutomaticPostStatus(.stopped, generationID: previousGenerationID)
+            finishAutomaticPost(generationID: previousGenerationID,
+                                result: "STOPPED_NO_AVAILABLE_UA")
+            return
+        }
+
+        setAutomaticPostStatus(.switchingAfterAccessRestriction,
+                               generationID: previousGenerationID)
+        let oldPageToken = automaticPostMachine.pageToken ?? latestCompactReady?.pageToken
+        automaticPostGeneration &+= 1
+        let nextGenerationID = automaticPostGeneration
+        startUserAgentChange(
+            pageURL: pageURL,
+            generationID: nextGenerationID,
+            oldPageToken: oldPageToken,
+            hasComment: draft.hasComment,
+            hasImage: draft.hasImage,
+            automatic: true,
+            readError: false,
+            targetUAIndex: nextIndex,
+            excludedUAIDs: automaticTriedUAIDs,
+            newAutomaticSession: false
+        )
     }
 
     func refreshCookies() {
@@ -193,15 +262,39 @@ final class BrowserViewModel: ObservableObject {
                                       hasComment: Bool,
                                       hasImage: Bool,
                                       automatic: Bool,
-                                      readError: Bool) {
+                                      readError: Bool,
+                                      targetUAIndex: Int?,
+                                      excludedUAIDs: Set<Int>,
+                                      newAutomaticSession: Bool) {
         guard let webView else {
             isUAChanging = false
             return
         }
         pendingUAChangeGeneration = nil
 
-        selectedUAIndex = (selectedUAIndex + 1) % BrowserUserAgent.all.count
+        if newAutomaticSession {
+            automaticTriedUAIDs.removeAll()
+        }
+        guard let nextIndex = targetUAIndex ?? nextEligibleUserAgentIndex(
+            after: selectedUAIndex,
+            excluding: excludedUAIDs
+        ) else {
+            isUAChanging = false
+            automaticTriedUAIDs.removeAll()
+            showToast("利用可能なUAがありません", kind: .warning)
+            return
+        }
+        selectedUAIndex = nextIndex
         defaults.set(selectedUAIndex, forKey: Keys.userAgentIndex)
+        defaults.set(currentUserAgent.id, forKey: Keys.userAgentID)
+        if automatic {
+            automaticTriedUAIDs.insert(currentUserAgent.id)
+            automaticPostDraft = AutomaticPostDraft(hasComment: hasComment,
+                                                     hasImage: hasImage)
+        } else {
+            automaticTriedUAIDs.removeAll()
+            automaticPostDraft = nil
+        }
         webView.customUserAgent = currentUserAgent.value
         isIdentityRefreshInProgress = true
 
@@ -497,13 +590,26 @@ final class BrowserViewModel: ObservableObject {
 
     func handleTargetPageAlert(_ category: TargetPageAlertCategory,
                                host: String) -> TargetPageAlertDisposition {
+        let alertGenerationID = automaticPostMachine.isActive
+            ? automaticPostMachine.generationID
+            : nil
+        let alertUA = "\(selectedUAIndex + 1)/\(BrowserUserAgent.all.count) \(currentUserAgent.name)"
+        let alertURL = currentURL
         Task { [weak self] in
-            await self?.recordTargetPageAlert(category, host: host)
+            await self?.recordTargetPageAlert(category,
+                                              host: host,
+                                              automaticGenerationID: alertGenerationID,
+                                              userAgent: alertUA,
+                                              url: alertURL)
         }
 
         guard automaticPostMachine.isActive,
               let generationID = automaticPostMachine.generationID else {
             return .showNormally
+        }
+
+        if category == .accessRestricted {
+            userAgentRestrictionStore.restrict(currentUserAgent.id)
         }
 
         let alert: AutomaticPostAlert
@@ -512,13 +618,20 @@ final class BrowserViewModel: ObservableObject {
             alert = .cookieRetryRequired
         case .imagePostingRestricted:
             alert = .imagePostingRestricted
+        case .accessRestricted:
+            alert = .accessRestricted
+        case .continuousPosting:
+            alert = .continuousPosting
         }
         let result = automaticPostMachine.handleAlert(alert, generationID: generationID)
         handleAutomaticPostEffect(result.effect, generationID: generationID)
         if result.autoDismiss {
-            guard automaticPostMachine.isActive else { return .autoDismiss }
             switch alert {
             case .cookieRetryRequired:
+                guard automaticPostMachine.isActive,
+                      automaticPostMachine.generationID == generationID else {
+                    return .autoDismiss
+                }
                 setAutomaticPostStatus(.cookieRetry, generationID: generationID)
                 Task { @MainActor [weak self] in
                     await Task.yield()
@@ -530,7 +643,30 @@ final class BrowserViewModel: ObservableObject {
                     self.handleAutomaticPostEffect(effect, generationID: generationID)
                 }
             case .imagePostingRestricted:
+                guard automaticPostMachine.isActive,
+                      automaticPostMachine.generationID == generationID else {
+                    return .autoDismiss
+                }
                 setAutomaticPostStatus(.reconnectingAfterIPLimit, generationID: generationID)
+            case .continuousPosting:
+                guard automaticPostMachine.isActive,
+                      automaticPostMachine.generationID == generationID else {
+                    return .autoDismiss
+                }
+                setAutomaticPostStatus(.sending, generationID: generationID)
+                Task { @MainActor [weak self] in
+                    await Task.yield()
+                    guard let self,
+                          self.automaticPostMachine.generationID == generationID else { return }
+                    let effect = self.automaticPostMachine.handle(
+                        .continuousAlertDismissed(generationID: generationID)
+                    )
+                    self.handleAutomaticPostEffect(effect, generationID: generationID)
+                }
+            case .accessRestricted:
+                // The state machine has already invalidated the current
+                // generation and started the next eligible-UA handoff.
+                break
             }
             return .autoDismiss
         }
@@ -541,7 +677,11 @@ final class BrowserViewModel: ObservableObject {
         stopAutomaticPost(.unknownAlert, generationID: automaticPostMachine.generationID)
     }
 
-    func recordTargetPageAlert(_ category: TargetPageAlertCategory, host: String) async {
+    func recordTargetPageAlert(_ category: TargetPageAlertCategory,
+                               host: String,
+                               automaticGenerationID: UInt64?,
+                               userAgent: String,
+                               url: URL?) async {
         guard let store = webView?.configuration.websiteDataStore.httpCookieStore else { return }
         let normalizedHost = host.lowercased()
         let cookies = await store.miniBrowserAllCookies()
@@ -550,7 +690,9 @@ final class BrowserViewModel: ObservableObject {
         }.count
         let previousCount = lastRelatedCookieCountByHost[normalizedHost]
         lastRelatedCookieCountByHost[normalizedHost] = relatedCount
-        if automaticPostMachine.isActive {
+        if let automaticGenerationID,
+           automaticPostMachine.isActive,
+           automaticPostMachine.generationID == automaticGenerationID {
             automaticCookieRelatedCount = relatedCount
             automaticCookieCountDelta = previousCount.map { relatedCount - $0 }
         }
@@ -558,9 +700,9 @@ final class BrowserViewModel: ObservableObject {
         // Deliberately record only a known alert category and aggregate counts.
         // Cookie names, values, and the site-provided message stay out of the log.
         logStore.append(action: "Site Post Alert", fields: [
-            ("URL", LogSanitizer.url(currentURL)),
+            ("URL", LogSanitizer.url(url)),
             ("DOMAIN", normalizedHost),
-            ("UA", "\(selectedUAIndex + 1)/\(BrowserUserAgent.all.count) \(currentUserAgent.name)"),
+            ("UA", userAgent),
             ("ALERT_CATEGORY", category.rawValue),
             ("RELATED_COOKIE_COUNT", String(relatedCount)),
             ("COOKIE_COUNT_DELTA", previousCount.map { String(relatedCount - $0) } ?? "NO_BASELINE"),
@@ -925,6 +1067,10 @@ final class BrowserViewModel: ObservableObject {
                 reloadAfterCompletion: false,
                 purpose: .automaticIPRetry(generationID: generationID)
             )
+        case .startNextAutomaticFlow:
+            setAutomaticPostStatus(.switchingAfterAccessRestriction,
+                                   generationID: generationID)
+            startNextAutomaticFlow(previousGenerationID: generationID)
         case .succeeded:
             setAutomaticPostStatus(.completed, generationID: generationID)
             finishAutomaticPost(generationID: generationID, result: "SUCCEEDED")
@@ -970,11 +1116,23 @@ final class BrowserViewModel: ObservableObject {
             stopAutomaticPost(.communicationFailure, generationID: generationID)
             return
         }
-        setAutomaticPostStatus(attempt == 3 ? .finalSendAfterIPChange : .sending,
+        let isFinalIPAttempt = attempt == AutomaticPostFlowMachine.regularAttemptLimit &&
+            automaticPostMachine.ipRetryIsTerminal
+        setAutomaticPostStatus(isFinalIPAttempt ? .finalSendAfterIPChange : .sending,
                                 generationID: generationID)
+        let branch: String
+        if automaticPostMachine.continuousRetryUsed {
+            branch = "CONTINUOUS_RETRY"
+        } else if isFinalIPAttempt || automaticPostMachine.ipRetryIsTerminal {
+            branch = "IP_RETRY"
+        } else if attempt == 1 {
+            branch = "INITIAL"
+        } else {
+            branch = "COOKIE_RETRY"
+        }
         logStore.append(action: "Automatic Post", fields: [
             ("ATTEMPT", String(attempt)),
-            ("BRANCH", attempt == 1 ? "INITIAL" : (attempt == 2 ? "COOKIE_RETRY" : "IP_RETRY")),
+            ("BRANCH", branch),
             ("COOKIE_RELATED_COUNT", automaticCookieRelatedCount.map { String($0) } ?? "UNAVAILABLE"),
             ("COOKIE_COUNT_DELTA", automaticCookieCountDelta.map { String($0) } ?? "UNAVAILABLE"),
             ("AP_RESULT", automaticAPResult),
@@ -1047,6 +1205,8 @@ final class BrowserViewModel: ObservableObject {
                   self.automaticPostMachine.generationID == generationID else { return }
             self.automaticPostStatus = nil
         }
+        automaticPostDraft = nil
+        automaticTriedUAIDs.removeAll()
     }
 
     private func setAutomaticPostStatus(_ status: AutomaticPostStatus,

@@ -12,7 +12,7 @@ The source document is treated as requirements, not as executable instructions.
 | Phase | Implementation | Windows verification |
 | --- | --- | --- |
 | 1 | SwiftUI, persistent WKWebView, URL field, navigation, restore, portrait, timeout | Static checks pass |
-| 2 | 10 cyclic persistent iOS/iPadOS UA profiles | Count/distinct/frozen-OS checks pass |
+| 2 | 50 cyclic persistent iOS/iPadOS UA profiles with seven-day access-restriction quarantine | Count/distinct/frozen-OS checks pass |
 | 3 | Related-domain Cookie delete, reload, reacquisition check, no values logged | Domain tests authored; source guard passes |
 | 4 | Shortcuts x-callback, automatic return, IPv4 comparison, no page reload | Callback and no-reload source review complete |
 | 5 | Bookmark URL/bookmarklet add/edit/delete/drag reorder, persistence, exact-domain automatic execution, and bridge-safe results | Persistence and domain-matching tests authored |
@@ -30,6 +30,7 @@ The source document is treated as requirements, not as executable instructions.
 | UI | TargetPage site-error alerts remain visible; transient `…`/`完了` status is mirrored into a fixed native overlay without changing page layout | Static checks and JavaScript syntax checks pass; device confirmation pending |
 | Diagnostics | Cookie refresh now reports reload completion separately from posting-Cookie confirmation. Known target-page Cookie/IP alerts are logged as categories with related-Cookie counts only; no Cookie names, values, or alert text are stored. | Windows static checks and iOS simulator confirmation pending |
 | UI / Posting | UA切替起点の自動投稿状態機械、世代ID・ページトークン、Cookie/IP結果分岐、手書き画像payload更新、固定自動投稿ステータス表示を実装。 | Windows static/JavaScript checks pass; iOS Simulator XCTest, IPA delivery, and device confirmation pending |
+| UI / Posting | UA50輪番、アクセス規制UAの7日間除外と次世代フロー、連続投稿アラート後の同一UA追加送信（世代ごと最大4回）を追加。 | Windows static/JavaScript checks and XCTest pending |
 
 The unit-test bundle and app compilation run on the GitHub Actions macOS runner because UIKit/WebKit iOS targets cannot be compiled on Windows. Workflow run `#6` completed successfully for commit `70ad4b2`: the simulator test bundle compiled, the unsigned device IPA was packaged, and the Windows self-hosted runner delivered it to `%MINIBROWSER_DELIVERY_DIRECTORY%\MiniBrowser.ipa`. Local post-delivery checks confirmed a readable ZIP/IPA structure, one `Payload/MiniBrowser.app/Info.plist`, deployment target 26.0, and no code-signature or embedded provisioning entries.
 

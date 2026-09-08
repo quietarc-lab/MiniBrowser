@@ -36,6 +36,20 @@ final class WebDialogPolicyTests: XCTestCase {
             ),
             .imagePostingRestricted
         )
+        XCTAssertEqual(
+            TargetPageAlertClassifier.category(
+                host: "img.2chan.net",
+                message: "KD182249032014.au-net.ne.jp はアクセス規制中です"
+            ),
+            .accessRestricted
+        )
+        XCTAssertEqual(
+            TargetPageAlertClassifier.category(
+                host: "img.2chan.net",
+                message: "連続投稿はもうしばらく\n時間を置いてからお願い致します。"
+            ),
+            .continuousPosting
+        )
         XCTAssertNil(TargetPageAlertClassifier.category(
             host: "example.com",
             message: "cookieを有効にしてもう一度送信してください"
@@ -51,6 +65,18 @@ final class WebDialogPolicyTests: XCTestCase {
         XCTAssertNil(TargetPageAlertClassifier.category(
             host: "img.2chan.net",
             message: "あなたのIPアドレスからは画像を投稿できません（再試行）"
+        ))
+        XCTAssertNil(TargetPageAlertClassifier.category(
+            host: "img.2chan.net",
+            message: "KD182249032014.au-net.ne.jp はアクセス規制中です（再試行）"
+        ))
+        XCTAssertNil(TargetPageAlertClassifier.category(
+            host: "img.2chan.net",
+            message: "アクセス規制中です"
+        ))
+        XCTAssertNil(TargetPageAlertClassifier.category(
+            host: "example.com",
+            message: "連続投稿はもうしばらく時間を置いてからお願い致します。"
         ))
     }
 }

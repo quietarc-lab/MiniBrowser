@@ -12,6 +12,7 @@ enum AutomaticPostStatus: String, Equatable {
     case cookieRetry = "Cookie確認後に再送"
     case reconnectingAfterIPLimit = "IP制限 → AP再接続中"
     case finalSendAfterIPChange = "IP変更後に最終送信"
+    case switchingAfterAccessRestriction = "アクセス規制 → 次のUAへ"
     case completed = "完了"
     case stopped = "自動投稿停止"
 
@@ -20,7 +21,8 @@ enum AutomaticPostStatus: String, Equatable {
         case .completed, .stopped:
             return true
         case .preparingUA, .checkingCookie, .sending, .cookieRetry,
-             .reconnectingAfterIPLimit, .finalSendAfterIPChange:
+             .reconnectingAfterIPLimit, .finalSendAfterIPChange,
+             .switchingAfterAccessRestriction:
             return false
         }
     }
