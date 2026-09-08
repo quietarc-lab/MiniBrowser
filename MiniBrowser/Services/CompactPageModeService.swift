@@ -192,10 +192,10 @@ enum CompactPageModeService {
             font-size: 0 !important;
             line-height: 0 !important;
           }
-          div.thre > table {
+          div.thre table {
             display: none !important;
           }
-          div.thre > table.minibrowser-own-response {
+          div.thre table.minibrowser-own-response {
             display: table !important;
             width: 100% !important;
             max-width: 100% !important;
@@ -204,13 +204,13 @@ enum CompactPageModeService {
             line-height: normal !important;
             table-layout: fixed !important;
           }
-          div.thre > table.minibrowser-own-response .rtd,
-          div.thre > table.minibrowser-own-response blockquote {
+          div.thre table.minibrowser-own-response .rtd,
+          div.thre table.minibrowser-own-response blockquote {
             max-width: 100% !important;
             overflow-wrap: anywhere !important;
             box-sizing: border-box !important;
           }
-          div.thre > table.minibrowser-own-response img {
+          div.thre table.minibrowser-own-response img {
             max-width: 100% !important;
             height: auto !important;
           }
@@ -539,12 +539,6 @@ enum CompactPageModeService {
         hideRange(thread.nextElementSibling);
       }
 
-      Array.from(thread.children).forEach(element => {
-        if (element.tagName !== "TABLE") {
-          element.classList.add("minibrowser-targetpage-thread-extra");
-        }
-      });
-
       const storageKey = "MiniBrowser.TargetPageOwnPosts:" + location.pathname;
       const pendingStorageKey = "MiniBrowser.TargetPagePendingPost:" + location.pathname;
       const defaultImageComments = new Set([
@@ -558,6 +552,18 @@ enum CompactPageModeService {
           .replace(/\r\n?/g, "\n")
           .replace(/[ \t]+$/gm, "")
           .trim();
+      }
+
+      function comparableText(value) {
+        return normalizedText(value)
+          .normalize("NFKC")
+          .replace(/\u00a0/g, " ")
+          .replace(/\s+/g, " ")
+          .trim();
+      }
+
+      function compactText(value) {
+        return comparableText(value).replace(/\s+/g, "");
       }
 
       function loadState() {
@@ -591,20 +597,36 @@ enum CompactPageModeService {
         const numberFromText = textMarker && textMarker.textContent.match(/(\d+)$/);
         const match = numberFromID || numberFromText;
         const blockquote = table.querySelector(".rtd blockquote, blockquote");
-        if (!match || !blockquote) return null;
+        if (!match) return null;
+        const body = blockquote ? normalizedText(blockquote.innerText || blockquote.textContent) : "";
         return {
           table,
           number: match[1],
           numericNumber: Number(match[1]),
-          body: normalizedText(blockquote.innerText || blockquote.textContent)
+          body,
+          bodyKey: comparableText(body),
+          compactBody: compactText(body),
+          hasImage: Boolean(table.querySelector('img[src]'))
         };
       }
 
       function responseInfos() {
-        return Array.from(thread.children)
-          .filter(element => element.tagName === "TABLE")
+        return Array.from(thread.querySelectorAll("table"))
           .map(responseInfo)
           .filter(Boolean);
+      }
+
+      function markThreadExtras() {
+        Array.from(thread.children).forEach(element => {
+          const isTable = element.tagName === "TABLE";
+          const containsResponseTable = !isTable &&
+            Boolean(element.querySelector('table [id^="delcheck"], table .cno, table .no_quote'));
+          if (isTable || containsResponseTable) {
+            element.classList.remove("minibrowser-targetpage-thread-extra");
+          } else {
+            element.classList.add("minibrowser-targetpage-thread-extra");
+          }
+        });
       }
 
       let state = loadState();
@@ -617,12 +639,19 @@ enum CompactPageModeService {
 
         state.pending.forEach(pending => {
           if (!pending || now - Number(pending.createdAt || 0) > 10 * 60 * 1000) return;
-          const body = normalizedText(pending.body);
+          const body = comparableText(pending.body);
+          const compactBody = compactText(pending.body);
+          const hasAttachment = pending.hasAttachment === true;
           const candidates = infos.filter(info => {
             if (own.has(info.number) || info.numericNumber <= Number(pending.afterNumber || 0)) {
               return false;
             }
-            return body ? info.body === body : defaultImageComments.has(info.body);
+            if (body) {
+              return info.bodyKey === body ||
+                (compactBody.length > 0 && info.compactBody === compactBody);
+            }
+            return hasAttachment ? info.hasImage || defaultImageComments.has(comparableText(info.body)) :
+              defaultImageComments.has(comparableText(info.body));
           });
           const match = candidates.sort((a, b) => a.numericNumber - b.numericNumber).pop();
           if (match) {
@@ -636,6 +665,8 @@ enum CompactPageModeService {
         state.pending = remaining;
         saveState(state);
 
+        markThreadExtras();
+
         infos.forEach(info => {
           info.table.classList.toggle("minibrowser-own-response", own.has(info.number));
         });
@@ -648,12 +679,16 @@ enum CompactPageModeService {
           const now = Date.now();
           if (now - lastRecordedAt < 1000) return;
           lastRecordedAt = now;
+          const body = textarea ? textarea.value : "";
+          const hasAttachment = Array.from(form.querySelectorAll('input[type="file"]'))
+            .some(input => input.files && input.files.length > 0);
           const infos = responseInfos();
           const afterNumber = infos.reduce((maximum, info) =>
             Math.max(maximum, info.numericNumber), 0
           );
           state.pending.push({
-            body: normalizedText(textarea && textarea.value),
+            body: normalizedText(body),
+            hasAttachment,
             afterNumber,
             createdAt: now
           });
@@ -661,9 +696,13 @@ enum CompactPageModeService {
           saveState(state);
         };
         form.addEventListener("submit", recordPendingPost, true);
-        if (submitButton) {
-          submitButton.addEventListener("click", recordPendingPost, true);
-        }
+        form.addEventListener("click", event => {
+          const target = event.target && event.target.closest ?
+            event.target.closest('input[type="submit"], button[type="submit"]') : null;
+          if (target && /返信|送信/.test(target.value || target.textContent || "")) {
+            recordPendingPost();
+          }
+        }, true);
       }
 
       reconcileAndRender();

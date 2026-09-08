@@ -21,6 +21,12 @@ final class CompactPageModeServiceTests: XCTestCase {
         XCTAssertTrue(script.contains("#contres"))
         XCTAssertTrue(script.contains("#ufm"))
         XCTAssertTrue(script.contains("minibrowser-own-response"))
+        XCTAssertTrue(script.contains("thread.querySelectorAll(\"table\")"),
+                      "Responses may be wrapped in a container during asynchronous posting.")
+        XCTAssertTrue(script.contains("markThreadExtras"))
+        XCTAssertTrue(script.contains("comparableText"))
+        XCTAssertTrue(script.contains("compactText"))
+        XCTAssertTrue(script.contains("hasAttachment"))
         XCTAssertTrue(script.contains("MiniBrowser.TargetPageOwnPosts:"))
         XCTAssertTrue(script.contains("10 * 60 * 1000"),
                       "Unmatched post bodies must expire instead of remaining indefinitely.")
