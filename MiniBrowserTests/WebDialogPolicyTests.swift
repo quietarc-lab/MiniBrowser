@@ -20,4 +20,29 @@ final class WebDialogPolicyTests: XCTestCase {
             message: "cookieを有効にしてもう一度送信してください"
         ))
     }
+
+    func testTargetPageAlertClassifierOnlyRecordsKnownTargetErrors() {
+        XCTAssertEqual(
+            TargetPageAlertClassifier.category(
+                host: "img.2chan.net",
+                message: "cookieを有効にして\nもう一度送信してください"
+            ),
+            .cookieRetryRequired
+        )
+        XCTAssertEqual(
+            TargetPageAlertClassifier.category(
+                host: "img.2chan.net",
+                message: "あなたのIPアドレスからは画像を投稿できません"
+            ),
+            .imagePostingRestricted
+        )
+        XCTAssertNil(TargetPageAlertClassifier.category(
+            host: "example.com",
+            message: "cookieを有効にしてもう一度送信してください"
+        ))
+        XCTAssertNil(TargetPageAlertClassifier.category(
+            host: "img.2chan.net",
+            message: "任意のエラー本文"
+        ))
+    }
 }

@@ -31,6 +31,7 @@ final class BrowserViewModel: ObservableObject {
     private var selectedUAIndex: Int
     private var pendingCookieRefresh: PendingCookieRefresh?
     private var pendingAP: PendingAP?
+    private var lastRelatedCookieCountByHost: [String: Int] = [:]
 
     private struct PendingCookieRefresh {
         let host: String
@@ -323,6 +324,30 @@ final class BrowserViewModel: ObservableObject {
         }
     }
 
+    func recordTargetPageAlert(_ category: TargetPageAlertCategory, host: String) async {
+        guard let store = webView?.configuration.websiteDataStore.httpCookieStore else { return }
+        let normalizedHost = host.lowercased()
+        let cookies = await store.miniBrowserAllCookies()
+        let relatedCount = cookies.filter {
+            CookieDomainMatcher.isRelated(cookieDomain: $0.domain, toHost: normalizedHost)
+        }.count
+        let previousCount = lastRelatedCookieCountByHost[normalizedHost]
+        lastRelatedCookieCountByHost[normalizedHost] = relatedCount
+
+        // Deliberately record only a known alert category and aggregate counts.
+        // Cookie names, values, and the site-provided message stay out of the log.
+        logStore.append(action: "Site Post Alert", fields: [
+            ("URL", LogSanitizer.url(currentURL)),
+            ("DOMAIN", normalizedHost),
+            ("UA", "\(selectedUAIndex + 1)/\(BrowserUserAgent.all.count) \(currentUserAgent.name)"),
+            ("ALERT_CATEGORY", category.rawValue),
+            ("RELATED_COOKIE_COUNT", String(relatedCount)),
+            ("COOKIE_COUNT_DELTA", previousCount.map { String(relatedCount - $0) } ?? "NO_BASELINE"),
+            ("POST_COOKIE", "UNVERIFIED"),
+            ("RESULT", "OBSERVED")
+        ])
+    }
+
     private func deleteRelatedCookiesForRefresh(identityRefresh: Bool) async {
         guard let webView,
               let host = webView.url?.host?.lowercased() else {
@@ -444,15 +469,16 @@ final class BrowserViewModel: ObservableObject {
         let after = allAfterReload.filter {
             CookieDomainMatcher.isRelated(cookieDomain: $0.domain, toHost: pending.host)
         }
-        let success = pending.deletionConfirmed && !after.isEmpty &&
+        let reloadObserved = pending.deletionConfirmed && !after.isEmpty &&
             (pending.beforeCount > 0 || pending.identityRefresh)
         logCookieRefresh(host: pending.host,
                          before: pending.beforeCount,
                          deleted: pending.deletedCount,
                          after: after.count,
-                         result: success ? "SUCCESS" : "FAILED")
-        showToast(success ? "Cookie再取得済み" : "Cookie再取得失敗",
-                  kind: success ? .success : .failure)
+                         result: reloadObserved ? "RELOADED_POST_COOKIE_UNVERIFIED" : "FAILED")
+        lastRelatedCookieCountByHost[pending.host] = after.count
+        showToast(reloadObserved ? "Cookie再読込完了（投稿用は未確認）" : "Cookie再取得失敗",
+                  kind: reloadObserved ? .warning : .failure)
         pendingCookieRefresh = nil
         isCookieRefreshing = false
         if pending.identityRefresh {
@@ -487,6 +513,7 @@ final class BrowserViewModel: ObservableObject {
             ("COOKIE_BEFORE", String(before)),
             ("COOKIE_DELETED", String(deleted)),
             ("COOKIE_AFTER_RELOAD", String(after)),
+            ("POST_COOKIE", "UNVERIFIED"),
             ("RESULT", result)
         ])
     }

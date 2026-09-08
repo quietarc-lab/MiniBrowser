@@ -166,10 +166,18 @@ struct BrowserWebView: UIViewRepresentable {
                      runJavaScriptAlertPanelWithMessage message: String,
                      initiatedByFrame frame: WKFrameInfo,
                      completionHandler: @escaping () -> Void) {
-            if WebDialogPolicy.shouldAutoDismissAlert(host: frame.request.url?.host ?? webView.url?.host,
+            let host = frame.request.url?.host ?? webView.url?.host
+            if WebDialogPolicy.shouldAutoDismissAlert(host: host,
                                                       message: message) {
                 completionHandler()
                 return
+            }
+            if let category = TargetPageAlertClassifier.category(host: host, message: message),
+               let host {
+                Task { [weak self] in
+                    guard let self else { return }
+                    await self.model.recordTargetPageAlert(category, host: host)
+                }
             }
             let alert = UIAlertController(title: dialogTitle(for: frame, webView: webView),
                                           message: message,
