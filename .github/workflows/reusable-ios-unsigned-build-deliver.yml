@@ -44,7 +44,9 @@ jobs:
   build:
     name: Build unsigned IPA
     runs-on: ${{ inputs.macos_runner }}
-    timeout-minutes: 12
+    # The iOS 26 simulator/toolchain can take longer than 12 minutes on a cold
+    # GitHub-hosted runner before the small SHA-256 artifact is finalized.
+    timeout-minutes: 20
 
     steps:
       - name: Check out repository
