@@ -168,13 +168,15 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 $uaText = Get-Content -LiteralPath $uaFile -Raw -Encoding UTF8
+$expectedUserAgentCount = 100
 $uaCount = ([regex]::Matches($uaText, '\.init\(id:\s*\d+')).Count
-if ($uaCount -ne 50) {
-    throw "Expected exactly 50 user agents, found $uaCount."
+if ($uaCount -ne $expectedUserAgentCount) {
+    throw "Expected exactly $expectedUserAgentCount user agents, found $uaCount."
 }
 $uaValues = [regex]::Matches($uaText, 'value:\s*"([^"]+)"') | ForEach-Object { $_.Groups[1].Value }
-if (($uaValues | Select-Object -Unique).Count -ne 50) {
-    throw 'Expected 50 distinct user-agent strings.'
+$distinctUaCount = ($uaValues | Select-Object -Unique).Count
+if ($distinctUaCount -ne $expectedUserAgentCount) {
+    throw "Expected $expectedUserAgentCount distinct user-agent strings."
 }
 if ($uaValues -match 'CPU (iPhone )?OS 26_') {
     throw 'iOS 26 UA profiles must use the frozen iOS 18 OS token.'
@@ -245,7 +247,7 @@ if ($PublicMetadata) {
 
 Write-Host 'Static checks passed.'
 Write-Host "User agents: $uaCount"
-Write-Host 'Distinct user-agent strings: 50'
+Write-Host "Distinct user-agent strings: $distinctUaCount"
 Write-Host 'Cookie value access: none'
 Write-Host 'Deployment target: iOS 26.0'
 if ($PublicMetadata) {

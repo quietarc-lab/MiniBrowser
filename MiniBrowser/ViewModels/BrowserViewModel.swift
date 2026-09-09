@@ -9,6 +9,7 @@ final class BrowserViewModel: ObservableObject {
         static let lastURL = "lastURL"
         static let userAgentIndex = "userAgentIndex"
         static let userAgentID = "userAgentID"
+        static let userAgentCatalogVersion = "userAgentCatalogVersion"
     }
 
     @Published var urlText = ""
@@ -99,13 +100,23 @@ final class BrowserViewModel: ObservableObject {
         self.bookmarkStore = BookmarkStore(defaults: defaults)
         self.ipService = ipService
         self.userAgentRestrictionStore = UserAgentRestrictionStore(defaults: defaults)
-        if let savedID = defaults.object(forKey: Keys.userAgentID) as? Int,
-           let savedIndex = BrowserUserAgent.all.firstIndex(where: { $0.id == savedID }) {
+        let catalogNeedsReset = defaults.integer(forKey: Keys.userAgentCatalogVersion) !=
+            BrowserUserAgent.catalogVersion
+        if catalogNeedsReset {
+            self.selectedUAIndex = 0
+        } else if let savedID = defaults.object(forKey: Keys.userAgentID) as? Int,
+                  let savedIndex = BrowserUserAgent.all.firstIndex(where: { $0.id == savedID }) {
             self.selectedUAIndex = savedIndex
         } else {
             let savedIndex = defaults.integer(forKey: Keys.userAgentIndex)
             self.selectedUAIndex = BrowserUserAgent.all.indices.contains(savedIndex) ? savedIndex : 0
         }
+        if catalogNeedsReset {
+            defaults.set(0, forKey: Keys.userAgentIndex)
+            defaults.set(BrowserUserAgent.all[0].id, forKey: Keys.userAgentID)
+            userAgentRestrictionStore.clearAll()
+        }
+        defaults.set(BrowserUserAgent.catalogVersion, forKey: Keys.userAgentCatalogVersion)
     }
 
     var currentUserAgent: BrowserUserAgent {

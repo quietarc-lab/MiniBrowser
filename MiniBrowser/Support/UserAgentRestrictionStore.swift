@@ -57,6 +57,13 @@ struct UserAgentRestrictionStore {
         saveEntries(entries)
     }
 
+    /// Removes restrictions from a previous catalog when the profile set is
+    /// replaced. Restriction IDs are catalog-specific and must not be applied
+    /// to newly assigned profile values.
+    func clearAll() {
+        defaults.removeObject(forKey: storageKey)
+    }
+
     private func storedEntries() -> [String: TimeInterval] {
         guard let raw = defaults.dictionary(forKey: storageKey) else { return [:] }
         return raw.reduce(into: [String: TimeInterval]()) { result, item in

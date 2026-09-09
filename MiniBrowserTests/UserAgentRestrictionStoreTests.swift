@@ -33,4 +33,19 @@ final class UserAgentRestrictionStoreTests: XCTestCase {
         XCTAssertFalse(store.isRestricted(1))
         XCTAssertTrue(store.isRestricted(2))
     }
+
+    func testClearAllRemovesCatalogSpecificRestrictions() {
+        let defaults = UserDefaults(suiteName: "UserAgentRestrictionStoreTests.clearAll")!
+        defaults.removePersistentDomain(forName: "UserAgentRestrictionStoreTests.clearAll")
+        defer { defaults.removePersistentDomain(forName: "UserAgentRestrictionStoreTests.clearAll") }
+        let store = UserAgentRestrictionStore(defaults: defaults,
+                                               storageKey: "expiries")
+        store.restrict(1)
+        store.restrict(100)
+
+        store.clearAll()
+
+        XCTAssertTrue(store.restrictedIDs().isEmpty)
+        XCTAssertNil(defaults.object(forKey: "expiries"))
+    }
 }

@@ -13,7 +13,7 @@ MiniBrowser is a lightweight iPhone browser built with SwiftUI and `WKWebView`. 
 ## MVP features
 
 - URL-only navigation, current URL tracking, last URL restoration, back/forward/reload, and a 30-second timeout
-- Fifty persistent iOS/iPadOS-style User-Agent profiles; a user-initiated UA change refreshes only the current host's related cookies, launches the AP shortcut, returns automatically, then reloads for cookie verification
+- One hundred persistent iOS/iPadOS-style User-Agent profiles; the catalog is replaced as a versioned set so old selections and quarantine IDs do not carry over. A user-initiated UA change refreshes only the current host's related cookies, launches the AP shortcut, returns automatically, then reloads for cookie verification
 - Current-host and parent-domain Cookie deletion followed by reload and verified reacquisition
 - `セルラー再接続` through Apple's Shortcuts x-callback URL, automatic return, and public IPv4 comparison without reloading the page when started manually
 - Local bookmarks and unlimited-length multiline bookmarklets with edit/delete/drag reorder and exact-domain automatic execution
