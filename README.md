@@ -4,11 +4,11 @@ MiniBrowser is a lightweight iPhone browser built with SwiftUI and `WKWebView`. 
 
 ## Canonical repository
 
-[quietarc-lab/MiniBrowser](https://github.com/quietarc-lab/MiniBrowser) is the single source of truth for MiniBrowser. Application code, XcodeGen configuration, GitHub Actions workflows, documentation, and issue tracking are maintained here on the `main` branch. Local copies and delivered IPA files are build products or working copies, not independent sources of truth.
+[quietarc-lab/ios-web-shell](https://github.com/quietarc-lab/ios-web-shell) is the single source of truth for MiniBrowser. Application code, XcodeGen configuration, GitHub Actions workflows, documentation, and issue tracking are maintained here on the `main` branch. Local copies and delivered IPA files are build products or working copies, not independent sources of truth.
 
 - Product baseline: [MiniBrowser_Codex_Spec.md](MiniBrowser_Codex_Spec.md)
 - Permanent implementation rules: [AGENTS.md](AGENTS.md)
-- Development and bug handoff: [GitHub Issues](https://github.com/quietarc-lab/MiniBrowser/issues)
+- Development and bug handoff: [GitHub Issues](https://github.com/quietarc-lab/ios-web-shell/issues)
 
 ## MVP features
 

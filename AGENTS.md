@@ -2,7 +2,7 @@
 
 ## Canonical source
 
-- The canonical repository is `https://github.com/quietarc-lab/MiniBrowser`.
+- The canonical repository is `https://github.com/quietarc-lab/ios-web-shell`.
 - Keep application source, XcodeGen configuration, workflows, scripts, tests, documentation, and issue tracking in this repository.
 - Treat `main` as the integration branch. Do not create an independent authoritative copy elsewhere.
 - `MiniBrowser_Codex_Spec.md` is the baseline product specification. A later explicit user requirement may extend or override it; record lasting changes in repository documentation.

@@ -155,7 +155,7 @@ Assert-Contains $workflowFile 'CODE_SIGNING_ALLOWED=NO' 'unsigned build'
 Assert-Contains $workflowFile 'actions/download-artifact@v8' 'artifact download on Windows'
 Assert-Contains $deliveryScriptFile 'MINIBROWSER_DELIVERY_DIRECTORY' 'runner-local delivery directory'
 Assert-Contains $specFile '# MiniBrowser 実装仕様書' 'canonical product specification'
-Assert-Contains $agentsFile 'quietarc-lab/MiniBrowser' 'canonical repository rule'
+Assert-Contains $agentsFile 'quietarc-lab/ios-web-shell' 'canonical repository rule'
 Assert-Contains $agentsFile 'GitHub Issues' 'issue handoff rule'
 
 $node = Get-Command node -ErrorAction SilentlyContinue
