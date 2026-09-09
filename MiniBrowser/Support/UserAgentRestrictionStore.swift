@@ -76,6 +76,10 @@ struct UserAgentRestrictionStore {
     }
 
     private func saveEntries(_ entries: [String: TimeInterval]) {
-        defaults.set(entries, forKey: storageKey)
+        if entries.isEmpty {
+            defaults.removeObject(forKey: storageKey)
+        } else {
+            defaults.set(entries, forKey: storageKey)
+        }
     }
 }
