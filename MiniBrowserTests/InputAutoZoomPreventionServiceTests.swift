@@ -4,8 +4,8 @@ import XCTest
 final class InputAutoZoomPreventionServiceTests: XCTestCase {
     func testScriptRaisesOnlySmallEditableControlText() {
         let script = InputAutoZoomPreventionService.scriptSource
-        XCTAssertTrue(script.contains("input-helper-no-auto-zoom"))
-        XCTAssertTrue(script.contains("input-helper-auto-zoom-style"))
+        XCTAssertTrue(script.contains("pagehelper-input-no-auto-zoom"))
+        XCTAssertTrue(script.contains("pagehelper-input-auto-zoom-style"))
         XCTAssertTrue(script.contains("__inputAutoZoomInstalled"))
         XCTAssertFalse(script.contains("minibrowser"))
         XCTAssertTrue(script.contains("fontSize < 16"))
