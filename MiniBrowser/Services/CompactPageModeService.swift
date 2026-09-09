@@ -1,7 +1,7 @@
 import WebKit
 
 enum CompactPageModeService {
-    static let scriptSource = #"""
+    static let scriptSource = PageMarkerNamespace.neutralize(#"""
     (() => {
       "use strict";
 
@@ -824,7 +824,7 @@ enum CompactPageModeService {
       retryObserver.observe(doc.documentElement, { childList: true, subtree: true });
       const retryTimer = setInterval(retryInitialization, 100);
     })();
-    """#
+    """#)
 
     static func install(on controller: WKUserContentController) {
         controller.addUserScript(WKUserScript(source: scriptSource,
@@ -832,7 +832,7 @@ enum CompactPageModeService {
                                               forMainFrameOnly: true))
     }
 
-    static let currentPostStateScript = #"""
+    static let currentPostStateScript = PageMarkerNamespace.neutralize(#"""
     (() => {
       "use strict";
       if (location.hostname !== "img.2chan.net" ||
@@ -852,9 +852,9 @@ enum CompactPageModeService {
         canSubmit: Boolean(submitButton)
       };
     })();
-    """#
+    """#)
 
-    static let submitReadinessScript = #"""
+    static let submitReadinessScript = PageMarkerNamespace.neutralize(#"""
     (() => {
       "use strict";
       const isTargetPage = location.hostname === "img.2chan.net" &&
@@ -915,9 +915,9 @@ enum CompactPageModeService {
       send({ type: "submitReadiness", ready: true, reason: "READY" });
       return true;
     })();
-    """#
+    """#)
 
-    static let autoSubmitScript = #"""
+    static let autoSubmitScript = PageMarkerNamespace.neutralize(#"""
     (() => {
       "use strict";
       if (location.hostname !== "img.2chan.net" ||
@@ -935,5 +935,5 @@ enum CompactPageModeService {
       submitButton.click();
       return true;
     })();
-    """#
+    """#)
 }

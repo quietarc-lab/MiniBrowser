@@ -1,7 +1,7 @@
 import WebKit
 
 enum InputAutoZoomPreventionService {
-    static let scriptSource = #"""
+    static let scriptSource = PageMarkerNamespace.neutralize(#"""
     (() => {
       "use strict";
 
@@ -64,7 +64,7 @@ enum InputAutoZoomPreventionService {
       observer.observe(document.documentElement, { childList: true, subtree: true });
       document.addEventListener("focusin", event => update(event.target), true);
     })();
-    """#
+    """#)
 
     static func install(on controller: WKUserContentController) {
         controller.addUserScript(WKUserScript(source: scriptSource,

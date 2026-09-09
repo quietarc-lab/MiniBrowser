@@ -18,18 +18,22 @@ const sources = [
 
 function rawSwiftScript(filePath, property) {
   const source = fs.readFileSync(filePath, "utf8");
-  const marker = `static let ${property} = #\"\"\"`;
-  const start = source.indexOf(marker);
-  if (start < 0) {
+  const declaration = source.indexOf(`static let ${property}`);
+  if (declaration < 0) {
     throw new Error(`Raw JavaScript property not found: ${filePath} (${property})`);
   }
 
-  const scriptStart = start + marker.length;
-  const scriptEnd = source.indexOf('\"\"\"#', scriptStart);
+  const scriptStartMarker = '#"""';
+  const scriptStart = source.indexOf(scriptStartMarker, declaration);
+  if (scriptStart < 0) {
+    throw new Error(`Raw JavaScript literal not found: ${filePath} (${property})`);
+  }
+  const scriptContentStart = scriptStart + scriptStartMarker.length;
+  const scriptEnd = source.indexOf('\"\"\"#', scriptContentStart);
   if (scriptEnd < 0) {
     throw new Error(`Raw JavaScript terminator not found: ${filePath} (${property})`);
   }
-  return source.slice(scriptStart, scriptEnd);
+  return source.slice(scriptContentStart, scriptEnd);
 }
 
 for (const [relativePath, property] of sources) {

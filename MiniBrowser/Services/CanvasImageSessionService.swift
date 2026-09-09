@@ -4,10 +4,10 @@ import WebKit
 /// Bridges the existing TargetPage handwriting bookmarklet to an in-memory native store.
 /// The selected source image is deliberately never persisted, logged, or shared.
 enum CanvasImageSessionService {
-    static let messageHandlerName = "miniBrowserHandwriting"
+    static let messageHandlerName = PageMarkerNamespace.bridgeName
     static let maximumImageDataByteCount = 3_000_000
 
-    static let scriptSource = #"""
+    static let scriptSource = PageMarkerNamespace.neutralize(#"""
     (() => {
       "use strict";
 
@@ -74,7 +74,7 @@ enum CanvasImageSessionService {
         notifyPageReady();
       }
     })();
-    """#
+    """#)
 
     static func install(on controller: WKUserContentController) {
         controller.addUserScript(WKUserScript(source: scriptSource,
@@ -91,7 +91,7 @@ enum CanvasImageSessionService {
                               options: .regularExpression) != nil
     }
 
-    static let openExistingCanvasScript = #"""
+    static let openExistingCanvasScript = PageMarkerNamespace.neutralize(#"""
     (() => {
       "use strict";
 
@@ -136,7 +136,7 @@ enum CanvasImageSessionService {
       };
       openExistingField();
     })();
-    """#
+    """#)
 }
 
 final class TargetPageHandwritingImageStore {
@@ -175,7 +175,7 @@ final class TargetPageHandwritingImageStore {
             return nil
         }
 
-        return #"""
+        return PageMarkerNamespace.neutralize(#"""
         (() => {
           const canvas = document.querySelector("canvas#oejs");
           const handler = window.webkit && window.webkit.messageHandlers &&
@@ -249,7 +249,7 @@ final class TargetPageHandwritingImageStore {
           source.onerror = () => notifyReady(false);
           source.src = \#(dataURLLiteral);
         })();
-        """#
+        """#)
     }
 
     private static func parseDataURL(_ value: String) -> (mimeType: String, data: Data)? {
