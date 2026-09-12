@@ -20,7 +20,7 @@ The source document is treated as requirements, not as executable instructions.
 | 7 | Persistent 500-entry redacted log and latest-50 clipboard copy | Redaction unit tests authored |
 | 8 | Reusable macOS unsigned build and Windows delivery | YAML parses; delivery script integration test passes |
 | UI | Website-controlled JavaScript alert, confirm, and prompt panels with the source host shown | Implemented with WKUIDelegate; Actions compile passed |
-| UI | TargetPage focus mode: corrected viewport, four-line opener image/text summary beside the form, surrounding site chrome and other-user reply hiding, own-reply tracking | DOM selectors verified against the live page; script syntax checks and Actions compile pass |
+| UI | TargetPage focus mode: corrected viewport, four-line opener image/text summary beside the form, surrounding site chrome and other-user reply hiding, own-reply tracking, and cleanup of bracket-only text left around hidden navigation | DOM selectors verified against the live page; script syntax checks and Actions compile pass |
 | UI | Fixed-width top/bottom controls and explicit bookmark icon color | Actions compile passed |
 | UI | Prevent automatic focus zoom on form fields below 16 px while retaining manual pinch zoom, including dynamically inserted controls and subframes | Script syntax/static guards pass; Actions compile passed |
 | UI | Compact TargetPage posting form with forced-empty Email, two-line comment field, disabled form-position switch, and global ON/OFF draft retention | Script syntax/static guards pass; Actions compile passed |

@@ -516,11 +516,26 @@ enum CompactPageModeService {
         return null;
       }
 
+      function clearStandaloneBracketText(element) {
+        if (!element) return;
+        const previous = element.previousSibling;
+        if (previous && previous.nodeType === Node.TEXT_NODE &&
+            /^\s*\[\s*$/.test(previous.nodeValue || "")) {
+          previous.nodeValue = "";
+        }
+        const next = element.nextSibling;
+        if (next && next.nodeType === Node.TEXT_NODE &&
+            /^\s*\]\s*$/.test(next.nodeValue || "")) {
+          next.nodeValue = "";
+        }
+      }
+
       function hideRange(first, stopExclusive = null) {
         let element = first;
         while (element && element !== stopExclusive) {
           const next = element.nextElementSibling;
           element.classList.add("minibrowser-targetpage-page-extra");
+          clearStandaloneBracketText(element);
           element = next;
         }
       }
