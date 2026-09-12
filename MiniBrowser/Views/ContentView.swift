@@ -32,14 +32,14 @@ struct ContentView: View {
         }
         .ignoresSafeArea(.keyboard, edges: .bottom)
         .task {
-            listModel.setUserAgent(model.currentUserAgent.value)
+            listModel.setUserAgent(model.effectiveUserAgent)
             listModel.start()
         }
         .onChange(of: scenePhase, initial: true) { _, phase in
             listModel.setSceneActive(phase == .active)
         }
         .onChange(of: model.isIdentityRefreshInProgress) { _, isInProgress in
-            listModel.setUserAgent(model.currentUserAgent.value)
+            listModel.setUserAgent(model.effectiveUserAgent)
             listModel.setNetworkActivityAllowed(!isInProgress)
         }
         .sheet(isPresented: $showingBookmarks) {

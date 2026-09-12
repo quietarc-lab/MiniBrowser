@@ -5,6 +5,9 @@ import WebKit
 
 @MainActor
 final class BrowserViewModel: ObservableObject {
+    private static let standardSubmitDelayNanoseconds: UInt64 = 2_000_000_000
+    private static let continuousAPMinimumIntervalNanoseconds: UInt64 = 3_100_000_000
+
     private enum Keys {
         static let lastURL = "lastURL"
         static let userAgentIndex = "userAgentIndex"
@@ -33,6 +36,7 @@ final class BrowserViewModel: ObservableObject {
     private let ipService: IPAddressService
     private let userAgentRestrictionStore: UserAgentRestrictionStore
     private var selectedUAIndex: Int
+    private var runtimeUserAgent: RuntimeUserAgent?
     private var automaticTriedUAIDs: Set<Int> = []
     private var automaticPostDraft: AutomaticPostDraft?
     private var pendingCookieRefresh: PendingCookieRefresh?
@@ -49,6 +53,8 @@ final class BrowserViewModel: ObservableObject {
     private var automaticSubmitReadinessStableSince: Date?
     private var automaticSubmitReadinessDeadline: Date?
     private var automaticSubmitReadinessLastReason: String?
+    private var automaticSubmitReadinessReason: AutomaticPostReadinessReason?
+    private var automaticContinuousAPCompletedUptimeNanoseconds: UInt64?
     private var handwritingImageAvailable = false
     private var automaticCookieRelatedCount: Int?
     private var automaticCookieCountDelta: Int?
@@ -94,12 +100,14 @@ final class BrowserViewModel: ObservableObject {
     }
 
     init(defaults: UserDefaults = .standard,
-         ipService: IPAddressService = IPAddressService()) {
+         ipService: IPAddressService = IPAddressService(),
+         userAgentGenerator: RuntimeUserAgentGenerator = RuntimeUserAgentGenerator()) {
         self.defaults = defaults
         self.logStore = DebugLogStore(defaults: defaults)
         self.bookmarkStore = BookmarkStore(defaults: defaults)
         self.ipService = ipService
         self.userAgentRestrictionStore = UserAgentRestrictionStore(defaults: defaults)
+        self.runtimeUserAgent = nil
         let catalogNeedsReset = defaults.integer(forKey: Keys.userAgentCatalogVersion) !=
             BrowserUserAgent.catalogVersion
         if catalogNeedsReset {
@@ -117,20 +125,64 @@ final class BrowserViewModel: ObservableObject {
             userAgentRestrictionStore.clearAll()
         }
         defaults.set(BrowserUserAgent.catalogVersion, forKey: Keys.userAgentCatalogVersion)
+
+        let generatedUserAgent = userAgentGenerator.generate { value in
+            let key = userAgentRestrictionStore.generatedRestrictionKey(for: value)
+            return userAgentRestrictionStore.isRestricted(key)
+        }
+        let launchSelectionSource: String
+        if let generatedUserAgent {
+            runtimeUserAgent = generatedUserAgent
+            launchSelectionSource = "GENERATED"
+        } else {
+            let restrictedIDs = userAgentRestrictionStore.restrictedIDs()
+            if let fallbackIndex = BrowserUserAgent.all.indices.first(where: {
+                !restrictedIDs.contains(BrowserUserAgent.all[$0].id)
+            }) {
+                selectedUAIndex = fallbackIndex
+                defaults.set(selectedUAIndex, forKey: Keys.userAgentIndex)
+                defaults.set(BrowserUserAgent.all[fallbackIndex].id,
+                             forKey: Keys.userAgentID)
+                launchSelectionSource = "FIXED_FALLBACK"
+            } else {
+                launchSelectionSource = "FIXED_CURRENT"
+            }
+            runtimeUserAgent = nil
+        }
+        logStore.append(action: "User Agent Launch Selection", fields: [
+            ("SOURCE", launchSelectionSource),
+            ("RESULT", "READY")
+        ])
     }
 
     var currentUserAgent: BrowserUserAgent {
         BrowserUserAgent.all[selectedUAIndex]
     }
 
+    /// The UA used for all requests in the current process. A generated value
+    /// is selected once during model initialization and is not regenerated on
+    /// scene activation or WebView recreation.
+    var effectiveUserAgent: String {
+        runtimeUserAgent?.value ?? currentUserAgent.value
+    }
+
     var userAgentButtonTitle: String {
-        "UA \(selectedUAIndex + 1)/\(BrowserUserAgent.all.count)"
+        if runtimeUserAgent != nil {
+            return "UA 自動"
+        }
+        return "UA \(selectedUAIndex + 1)/\(BrowserUserAgent.all.count)"
+    }
+
+    private var effectiveUserAgentLogLabel: String {
+        runtimeUserAgent == nil
+            ? "\(selectedUAIndex + 1)/\(BrowserUserAgent.all.count) \(currentUserAgent.name)"
+            : "GENERATED"
     }
 
     func attach(webView: WKWebView) {
         guard self.webView !== webView else { return }
         self.webView = webView
-        webView.customUserAgent = currentUserAgent.value
+        webView.customUserAgent = effectiveUserAgent
 
         if let saved = defaults.string(forKey: Keys.lastURL),
            let url = URLNormalizer.normalize(saved) {
@@ -314,6 +366,7 @@ final class BrowserViewModel: ObservableObject {
             return
         }
         selectedUAIndex = nextIndex
+        runtimeUserAgent = nil
         defaults.set(selectedUAIndex, forKey: Keys.userAgentIndex)
         defaults.set(currentUserAgent.id, forKey: Keys.userAgentID)
         if automatic {
@@ -324,7 +377,7 @@ final class BrowserViewModel: ObservableObject {
             automaticTriedUAIDs.removeAll()
             automaticPostDraft = nil
         }
-        webView.customUserAgent = currentUserAgent.value
+        webView.customUserAgent = effectiveUserAgent
         isIdentityRefreshInProgress = true
 
         automaticPostPreparationTimer?.cancel()
@@ -333,6 +386,8 @@ final class BrowserViewModel: ObservableObject {
         automaticSubmitReadinessStableSince = nil
         automaticSubmitReadinessDeadline = nil
         automaticSubmitReadinessLastReason = nil
+        automaticSubmitReadinessReason = nil
+        automaticContinuousAPCompletedUptimeNanoseconds = nil
         automaticPostStatusTask?.cancel()
         latestCompactReady = nil
         automaticCookieRelatedCount = nil
@@ -353,7 +408,7 @@ final class BrowserViewModel: ObservableObject {
         showToast("UA変更後にCookie更新とAP再接続を開始します", kind: .success)
         var userAgentFields = [
             ("URL", LogSanitizer.url(pageURL)),
-            ("UA", "\(selectedUAIndex + 1)/\(BrowserUserAgent.all.count) \(currentUserAgent.name)"),
+            ("UA", effectiveUserAgentLogLabel),
             ("FLOW_MODE", automatic && !readError ? "AUTOMATIC" : "MANUAL"),
             ("AUTO_CANDIDATE", automatic ? "YES" : "NO"),
             ("READ_STATE", readError ? "FAILED" : "OK"),
@@ -392,7 +447,7 @@ final class BrowserViewModel: ObservableObject {
 
         Task { [weak self] in
             guard let self else { return }
-            let before = try? await ipService.fetchIPv4(userAgent: currentUserAgent.value)
+            let before = try? await ipService.fetchIPv4(userAgent: effectiveUserAgent)
             self.pendingAP = PendingAP(beforeIPv4: before,
                                        reloadAfterCompletion: reloadAfterCompletion,
                                        purpose: purpose)
@@ -794,7 +849,7 @@ final class BrowserViewModel: ObservableObject {
         showToast("読み込み失敗", kind: .failure)
         logStore.append(action: "Web Load Failure", fields: [
             ("URL", LogSanitizer.url(url)),
-            ("UA", "\(selectedUAIndex + 1)/\(BrowserUserAgent.all.count) \(currentUserAgent.name)"),
+            ("UA", effectiveUserAgentLogLabel),
             ("ERROR_DOMAIN", (error as NSError).domain),
             ("ERROR_CODE", String((error as NSError).code)),
             ("DETAIL", error.localizedDescription),
@@ -814,7 +869,7 @@ final class BrowserViewModel: ObservableObject {
         showToast("読み込みタイムアウト", kind: .failure)
         logStore.append(action: "Web Load Timeout", fields: [
             ("URL", LogSanitizer.url(url)),
-            ("UA", "\(selectedUAIndex + 1)/\(BrowserUserAgent.all.count) \(currentUserAgent.name)"),
+            ("UA", effectiveUserAgentLogLabel),
             ("TIMEOUT_SECONDS", "30"),
             ("RESULT", "TIMEOUT")
         ])
@@ -860,10 +915,17 @@ final class BrowserViewModel: ObservableObject {
 
     func handleTargetPageAlert(_ category: TargetPageAlertCategory,
                                host: String) -> TargetPageAlertDisposition {
+        if category == .accessRestricted,
+           let runtimeUserAgent {
+            let key = userAgentRestrictionStore.generatedRestrictionKey(
+                for: runtimeUserAgent.value
+            )
+            userAgentRestrictionStore.restrict(key)
+        }
         let alertGenerationID = automaticPostMachine.isActive
             ? automaticPostMachine.generationID
             : nil
-        let alertUA = "\(selectedUAIndex + 1)/\(BrowserUserAgent.all.count) \(currentUserAgent.name)"
+        let alertUA = effectiveUserAgentLogLabel
         let alertURL = currentURL
         let alertContext = alertGenerationID.flatMap {
             automaticLogContext(generationID: $0)
@@ -886,7 +948,9 @@ final class BrowserViewModel: ObservableObject {
         }
 
         if category == .accessRestricted {
-            userAgentRestrictionStore.restrict(currentUserAgent.id)
+            if runtimeUserAgent == nil {
+                userAgentRestrictionStore.restrict(currentUserAgent.id)
+            }
         }
 
         let alert: AutomaticPostAlert
@@ -987,7 +1051,7 @@ final class BrowserViewModel: ObservableObject {
                                     automaticGenerationID: nil,
                                     logContext: nil,
                                     disposition: "SHOWN",
-                                    userAgent: "\(selectedUAIndex + 1)/\(BrowserUserAgent.all.count) \(currentUserAgent.name)",
+                                    userAgent: effectiveUserAgentLogLabel,
                                     url: currentURL)
     }
 
@@ -1141,7 +1205,7 @@ final class BrowserViewModel: ObservableObject {
             self.showToast(failureMessage, kind: .failure)
             self.logStore.append(action: "Bookmarklet Execution", fields: [
                 ("URL", LogSanitizer.url(self.currentURL)),
-                ("UA", "\(self.selectedUAIndex + 1)/\(BrowserUserAgent.all.count) \(self.currentUserAgent.name)"),
+                ("UA", self.effectiveUserAgentLogLabel),
                 ("ERROR_DOMAIN", (error as NSError).domain),
                 ("ERROR_CODE", String((error as NSError).code)),
                 ("DETAIL", error.localizedDescription),
@@ -1257,7 +1321,7 @@ final class BrowserViewModel: ObservableObject {
         var fields = [
             ("URL", LogSanitizer.url(currentURL)),
             ("DOMAIN", host),
-            ("UA", "\(selectedUAIndex + 1)/\(BrowserUserAgent.all.count) \(currentUserAgent.name)"),
+            ("UA", effectiveUserAgentLogLabel),
             ("COOKIE_BEFORE", String(before)),
             ("COOKIE_DELETED", String(deleted)),
             ("COOKIE_AFTER_RELOAD", String(after)),
@@ -1304,7 +1368,7 @@ final class BrowserViewModel: ObservableObject {
         let delays: [UInt64] = [1_500_000_000, 2_000_000_000, 3_000_000_000, 4_000_000_000]
         for delay in delays {
             try? await Task.sleep(nanoseconds: delay)
-            if let value = try? await ipService.fetchIPv4(userAgent: currentUserAgent.value) {
+            if let value = try? await ipService.fetchIPv4(userAgent: effectiveUserAgent) {
                 return value
             }
         }
@@ -1392,6 +1456,8 @@ final class BrowserViewModel: ObservableObject {
                 stopAutomaticPost(.communicationFailure, generationID: generationID)
                 return
             }
+            automaticContinuousAPCompletedUptimeNanoseconds =
+                DispatchTime.now().uptimeNanoseconds
             let effect = automaticPostMachine.handle(
                 .continuousAPReconnectCompleted(generationID: generationID, success: true)
             )
@@ -1583,6 +1649,7 @@ final class BrowserViewModel: ObservableObject {
         automaticSubmitReadinessTask?.cancel()
         automaticSubmitReadinessStableSince = nil
         automaticSubmitReadinessLastReason = nil
+        automaticSubmitReadinessReason = reason
         appendAutomaticEvent(
             generationID: generationID,
             phase: "READINESS",
@@ -1594,15 +1661,8 @@ final class BrowserViewModel: ObservableObject {
             ]
         )
 
-        let cooldown: UInt64 = reason == .continuousAPRetry ?
-            3_000_000_000 : 0
-        automaticSubmitReadinessDeadline = Date().addingTimeInterval(
-            10 + Double(cooldown) / 1_000_000_000
-        )
+        automaticSubmitReadinessDeadline = Date().addingTimeInterval(10)
         automaticSubmitReadinessTask = Task { @MainActor [weak self] in
-            if cooldown > 0 {
-                try? await Task.sleep(nanoseconds: cooldown)
-            }
             guard let self,
                   !Task.isCancelled,
                   self.automaticPostMachine.generationID == generationID,
@@ -1717,8 +1777,24 @@ final class BrowserViewModel: ObservableObject {
         automaticSubmitReadinessDeadline = nil
         automaticSubmitReadinessStableSince = nil
         automaticPostPreparationTimer?.cancel()
+        let readinessReason = automaticSubmitReadinessReason
+        let delayNanoseconds = submitDelayNanoseconds(for: readinessReason)
+        if readinessReason == .continuousAPRetry {
+            appendAutomaticEvent(
+                generationID: generationID,
+                phase: "READINESS",
+                event: "SUBMIT_DELAY_SCHEDULED",
+                result: "SCHEDULED",
+                fields: [
+                    ("DELAY_MS", String(delayNanoseconds / 1_000_000)),
+                    ("MIN_INTERVAL_MS",
+                     String(Self.continuousAPMinimumIntervalNanoseconds / 1_000_000))
+                ]
+            )
+        }
+        automaticSubmitReadinessReason = nil
         automaticPostPreparationTimer = Task { @MainActor [weak self] in
-            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            try? await Task.sleep(nanoseconds: delayNanoseconds)
             guard let self,
                   !Task.isCancelled,
                   self.automaticPostMachine.generationID == generationID,
@@ -1730,6 +1806,19 @@ final class BrowserViewModel: ObservableObject {
             )
             self.handleAutomaticPostEffect(effect, generationID: generationID)
         }
+    }
+
+    private func submitDelayNanoseconds(for reason: AutomaticPostReadinessReason?) -> UInt64 {
+        guard reason == .continuousAPRetry,
+              let completedAt = automaticContinuousAPCompletedUptimeNanoseconds else {
+            return Self.standardSubmitDelayNanoseconds
+        }
+        // Readiness is polled in parallel; this deadline is the only intentional
+        // delay for the fourth attempt, so AP completion to click stays just over
+        // three seconds when the page is already ready.
+        let target = completedAt &+ Self.continuousAPMinimumIntervalNanoseconds
+        let now = DispatchTime.now().uptimeNanoseconds
+        return target > now ? target - now : 0
     }
 
     private func submitAutomatically(attempt: Int, generationID: UInt64) {
@@ -1868,6 +1957,8 @@ final class BrowserViewModel: ObservableObject {
         automaticSubmitReadinessStableSince = nil
         automaticSubmitReadinessDeadline = nil
         automaticSubmitReadinessLastReason = nil
+        automaticSubmitReadinessReason = nil
+        automaticContinuousAPCompletedUptimeNanoseconds = nil
         var finalFields = [
             ("ATTEMPT", String(automaticPostMachine.lastAttempt)),
             ("BRANCH", "FINAL"),

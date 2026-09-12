@@ -48,4 +48,41 @@ final class UserAgentRestrictionStoreTests: XCTestCase {
         XCTAssertTrue(store.restrictedIDs().isEmpty)
         XCTAssertNil(defaults.object(forKey: "expiries"))
     }
+
+    func testGeneratedKeyIsStableForTheInstallAndDoesNotStoreTheRawValue() {
+        let suiteName = "UserAgentRestrictionStoreTests.generatedKey.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let store = UserAgentRestrictionStore(defaults: defaults,
+                                               storageKey: "expiries")
+        let value = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_7 like Mac OS X)"
+
+        let first = store.generatedRestrictionKey(for: value)
+        let second = store.generatedRestrictionKey(for: value)
+
+        XCTAssertEqual(first, second)
+        XCTAssertTrue(first.hasPrefix("generated:"))
+        XCTAssertFalse(first.contains(value))
+        XCTAssertNil(defaults.object(forKey: "expiries"))
+    }
+
+    func testGeneratedRestrictionExpiresAndIsNotReturnedAsFixedID() {
+        let suiteName = "UserAgentRestrictionStoreTests.generatedExpiry.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        var now = Date(timeIntervalSince1970: 2_000_000)
+        let store = UserAgentRestrictionStore(
+            defaults: defaults,
+            storageKey: "expiries",
+            now: { now }
+        )
+        let key = store.generatedRestrictionKey(for: "generated-value")
+        let expiry = store.restrict(key)
+
+        XCTAssertTrue(store.isRestricted(key))
+        XCTAssertTrue(store.restrictedIDs().isEmpty)
+        now = expiry.addingTimeInterval(1)
+        XCTAssertFalse(store.isRestricted(key))
+        XCTAssertFalse(store.restrictedKeys().contains(key))
+    }
 }
